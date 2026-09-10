@@ -244,30 +244,63 @@ export function verifySchedule(kit) {
   }
 
   // --- front-loading -----------------------------------------------------------
+  //
+  // Difficulty is checked WITHIN each priority tier, never across them, because the two
+  // halves of "harder and higher-priority material lands earlier" can genuinely conflict:
+  // a nice-to-have system-design question may be harder than a must-have React one.
+  // Priority wins that argument — must-recall is what the kit is judged on, and a
+  // candidate with two days should meet the must-haves first regardless of which
+  // question is meatier. Checking difficulty globally would therefore report a violation
+  // against a schedule that is ordered correctly. Within a tier, the ordering claim is
+  // unambiguous and is enforced.
+  const mustRequirementIdSet = new Set(
+    requirements
+      .filter((requirement) => requirement?.priority === 'must')
+      .map((requirement) => requirement?.id)
+      .filter((id) => typeof id === 'string' && id !== '')
+  );
+
+  const coversMust = (question) =>
+    (Array.isArray(question?.requirement_ids) ? question.requirement_ids : []).some((id) =>
+      mustRequirementIdSet.has(id)
+    );
+
   const inDayOrder = [...days].sort((left, right) => (left?.day ?? 0) - (right?.day ?? 0));
   const isNewMaterial = markNewMaterialDays(inDayOrder);
-  const newMaterialDifficulty = inDayOrder
-    .map((day, index) => {
-      if (!isNewMaterial[index]) return null;
-      const ids = Array.isArray(day?.question_ids) ? day.question_ids : [];
-      const values = ids
-        .map((id) => questionById.get(id)?.difficulty)
-        .filter((value) => Number.isInteger(value));
-      return values.length === 0 ? null : mean(values);
-    })
-    .filter((value) => value !== null);
 
-  if (newMaterialDifficulty.length >= 2) {
-    const half = Math.floor(newMaterialDifficulty.length / 2);
-    const front = mean(newMaterialDifficulty.slice(0, half));
-    const back = mean(newMaterialDifficulty.slice(half));
+  /** Per-day mean difficulty for one priority tier, days with none of that tier omitted. */
+  const difficultySeriesFor = (wantMust) =>
+    inDayOrder
+      .map((day, index) => {
+        if (!isNewMaterial[index]) return null;
+        const ids = Array.isArray(day?.question_ids) ? day.question_ids : [];
+        const values = ids
+          .map((id) => questionById.get(id))
+          .filter((question) => question && coversMust(question) === wantMust)
+          .map((question) => question.difficulty)
+          .filter((value) => Number.isInteger(value));
+        return values.length === 0 ? null : mean(values);
+      })
+      .filter((value) => value !== null);
+
+  for (const [tier, wantMust] of [
+    ['must', true],
+    ['nice', false],
+  ]) {
+    const series = difficultySeriesFor(wantMust);
+    if (series.length < 2) continue;
+
+    const half = Math.floor(series.length / 2);
+    const front = mean(series.slice(0, half));
+    const back = mean(series.slice(half));
+
     // A tolerance, not a loophole: with few days per half, one easy question can tip an
     // otherwise correctly ordered schedule. A real inversion is much larger than this.
     if (front + 0.001 < back) {
       add(
         SCHEDULE_VIOLATIONS.NOT_FRONT_LOADED,
         'schedule.days',
-        `Later days are harder than earlier ones (front half ${front.toFixed(2)}, back half ${back.toFixed(2)}). Harder material must land earlier.`
+        `Later days carry harder ${tier}-priority material than earlier ones (front half ${front.toFixed(2)}, back half ${back.toFixed(2)}). Within a priority tier, harder material must land earlier.`
       );
     }
   }
