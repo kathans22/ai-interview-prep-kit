@@ -129,6 +129,32 @@ export const EXTRACTION_SYSTEM_INSTRUCTION = [
   'three requirements for a three-line posting is correct.',
 ].join('\n');
 
+/**
+ * MEASURED SCORES for the prompt above, from `npm run eval:extraction` over the five
+ * hand-labelled fixtures (prompt hash 4e85b4bd3a76, gemini-3.6-flash):
+ *
+ *   must-recall        100%   target >= 90%
+ *   must-precision      90%   target >= 85%
+ *   priority accuracy  100%   target >= 90%
+ *   evidence drops       0%   target <=  5%
+ *   inventions            0   target  =  0     across 40 forbidden strings
+ *   tier mix   30 exact / 4 substring / 0 overlap — 100% quoted literally
+ *
+ * REJECTED CHANGE, RECORDED SO IT IS NOT RETRIED. An earlier revision added a rule
+ * excluding responsibilities from requirements, with the test "could a candidate claim
+ * this on a CV before being hired?". It lifted precision 90% -> 100% and dropped
+ * RECALL 100% -> 80%: on the benefits-heavy fixture it returned ZERO requirements,
+ * because that posting states its only two real requirements as duties — "you'll be
+ * writing SQL against our warehouse and building dashboards in Looker". The rule threw
+ * the sentence away, SQL and Looker with it.
+ *
+ * That trade is bad twice over: 20 points of recall for 10 of precision, and recall is
+ * the scored criterion. A refinement — extract the SKILL named inside a duty, discard
+ * only the task — is plausible and UNMEASURED; the daily quota ran out before it could
+ * be scored. Do not ship it on the strength of the reasoning. Measure it first:
+ *   node --env-file=.env scripts/evalExtraction.js        (5 calls, a quarter of a day)
+ */
+
 /** Normalise for comparison when de-duplicating. */
 function normalise(text) {
   return String(text ?? '')
