@@ -1,0 +1,9 @@
+# Normalise line endings. Development happens on Windows; without this, CRLF creeps
+# into the repository and later diffs report whole files as changed.
+* text=auto eol=lf
+
+# Binary-ish assets git should not try to normalise.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary
