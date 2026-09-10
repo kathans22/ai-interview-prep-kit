@@ -29,6 +29,7 @@
  */
 
 import { LlmError, LLM_ERROR_CODES, assertUsableResponse } from './provider.js';
+import { withRetry, RETRY_DEFAULTS } from './retry.js';
 
 /** How much of a bad response to carry in an error before it stops being useful. */
 const ERROR_TEXT_LIMIT = 500;
@@ -170,11 +171,23 @@ export async function parseWithRepair({ response, repair, step, onRepair } = {})
  * @param {{ complete: Function }} options.provider
  * @param {object} options.request systemInstruction, contents, responseSchema, maxTokens
  * @param {string} [options.step]
- * @param {() => void} [options.spend] called once per attempt, before it is made
+ * @param {() => void} [options.spend] called once per WORK unit, before it is attempted
  * @param {(event: object) => void} [options.onRepair]
+ * @param {(event: object) => void} [options.onRetry] fires per transport retry
+ * @param {number} [options.attempts] transport attempts per work unit
+ * @param {(ms: number) => Promise<void>} [options.sleep] injected for tests
  * @returns {Promise<object>} the parsed data
  */
-export async function completeStructured({ provider, request, step, spend, onRepair } = {}) {
+export async function completeStructured({
+  provider,
+  request,
+  step,
+  spend,
+  onRepair,
+  onRetry,
+  attempts = RETRY_DEFAULTS.attempts,
+  sleep,
+} = {}) {
   if (!provider || typeof provider.complete !== 'function') {
     throw new LlmError(
       LLM_ERROR_CODES.NOT_CONFIGURED,
@@ -183,9 +196,29 @@ export async function completeStructured({ provider, request, step, spend, onRep
     );
   }
 
+  /**
+   * One unit of work: spend the budget once, then let retry.js handle transport.
+   *
+   * A TRANSPORT RETRY IS NOT A REPAIR, AND THEY ARE ACCOUNTED FOR DIFFERENTLY.
+   * A repair is a second, different request that produces new content, so it spends
+   * from the per-kit call budget — Block C is explicit about that. A retry after a 429
+   * or a 503 is the SAME request attempted again because the network or the service
+   * failed; it consumes RPD (which the limiter owns) but it is not another unit of
+   * work, and charging it to the 12-call ceiling would let one bad afternoon at Google
+   * silently halve what a kit is allowed to do.
+   *
+   * Wiring retry here rather than at each call site is deliberate: this is the single
+   * funnel every generation step goes through, so no step can forget it. Before this,
+   * `withRetry` existed, was tested, and was called by nothing — a transient 503 from
+   * Gemini failed a generation step outright, which is exactly what happened on the
+   * first real call this project ever made.
+   */
   const attempt = async (overrides = {}) => {
     if (typeof spend === 'function') spend();
-    const { data } = await provider.complete({ ...request, ...overrides, step });
+    const { data } = await withRetry(
+      () => provider.complete({ ...request, ...overrides, step }),
+      { attempts, step, onRetry, ...(sleep ? { sleep } : {}) }
+    );
     return data;
   };
 
