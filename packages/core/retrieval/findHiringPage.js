@@ -28,6 +28,7 @@
 
 import { completeStructured } from '../llm/json.js';
 import { safePromptMany } from '../llm/safePrompt.js';
+import { object, str, int } from '../llm/schema.js';
 
 export const HIRING_PAGE_REASONS = Object.freeze({
   FOUND: 'HIRING_PAGE_FOUND',
@@ -50,25 +51,23 @@ const EXCERPT_CHARS = 700;
  */
 const OBVIOUS_SCORE = 15;
 
-/** Flat schema — the dialect is an OpenAPI subset and does not take unions cleanly. */
-export const HIRING_PAGE_SCHEMA = Object.freeze({
-  type: 'object',
-  properties: {
-    chosen_url: {
-      type: 'string',
-      description: 'The URL of the page that describes the hiring or interview process. Empty string if none of them do.',
-    },
-    confidence: {
-      type: 'integer',
-      description: 'Confidence from 1 (guess) to 5 (certain) that the chosen page describes a hiring process.',
-    },
-    reason: {
-      type: 'string',
-      description: 'One sentence on why this page was chosen, or why none qualified.',
-    },
-  },
-  required: ['chosen_url', 'confidence', 'reason'],
-});
+/**
+ * Flat schema — the dialect is an OpenAPI subset and does not take unions cleanly.
+ * Types come from the shared builders because the dialect's `type` is an ENUM in upper
+ * case; a lowercase 'object' reads fine, passes every local test and is rejected by the
+ * API on the first real call.
+ */
+export const HIRING_PAGE_SCHEMA = Object.freeze(
+  object({
+    chosen_url: str(
+      'The URL of the page that describes the hiring or interview process. Empty string if none of them do.'
+    ),
+    confidence: int(
+      'Confidence from 1 (guess) to 5 (certain) that the chosen page describes a hiring process.'
+    ),
+    reason: str('One sentence on why this page was chosen, or why none qualified.'),
+  })
+);
 
 const SYSTEM_INSTRUCTION = [
   'You identify which page of a company website describes how the company HIRES people:',
