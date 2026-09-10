@@ -329,6 +329,31 @@ test('the suspected rate limit is recorded, because the right wait differs', () 
   assert.equal(classifyRateLimit('something else'), RATE_LIMIT_KINDS.UNKNOWN);
 });
 
+test('the real Gemini daily-quota 429 is classified as RPD, not RPM', () => {
+  // Verbatim from the 429 this project actually received. Two traps in one message:
+  // a docs URL containing "rate-limits", and the quota named "PerDay" without spaces.
+  // Read as RPM it is retryable, so backoff would spend more of a quota already gone.
+  const real =
+    'You exceeded your current quota, please check your plan and billing details. ' +
+    'For more information on this error, head to: https://ai.google.dev/gemini-api/docs/rate-limits. ' +
+    'To monitor your current usage, head to: https://ai.dev/rate-limit. ' +
+    '* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, ' +
+    'limit: 20, model: gemini-3.6-flash. GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+
+  assert.equal(classifyRateLimit(real), RATE_LIMIT_KINDS.RPD);
+
+  const error = classifyError({ status: 429, message: real });
+  assert.equal(error.details.limit, RATE_LIMIT_KINDS.RPD);
+  assert.equal(isRetryable(error), false, 'a daily ceiling must never be retried into');
+});
+
+test('a documentation URL alone is not a rate-limit signal', () => {
+  assert.equal(
+    classifyRateLimit('see https://ai.google.dev/gemini-api/docs/rate-limits'),
+    RATE_LIMIT_KINDS.UNKNOWN
+  );
+});
+
 test('Retry-After is read from either header shape', () => {
   assert.equal(retryAfterMs({ headers: { 'retry-after': '3' } }), 3000);
   // Duck-typed on .get, so a Headers and a Map both work — the SDK has used both shapes.

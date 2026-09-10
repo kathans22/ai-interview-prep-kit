@@ -65,17 +65,37 @@ export const RETRYABLE_CODES = Object.freeze([
 ]);
 
 /**
- * Guess which limit a 429 refers to. Gemini does not always say, and the wait differs:
- * RPM clears in about a minute, TPM within the minute, RPD not until the daily reset.
- * A guess that is logged is worth more than a silent uniform backoff.
+ * Which limit a 429 refers to. The wait that is correct depends on the answer: RPM
+ * clears in about a minute, TPM within the minute, RPD not until the daily reset — so
+ * getting this wrong means either waiting pointlessly or retrying into a wall.
+ *
+ * TWO TRAPS, BOTH HIT IN PRODUCTION ON THE FIRST REAL RATE LIMIT:
+ *
+ *   1. The message body contains a documentation URL —
+ *      ai.google.dev/gemini-api/docs/rate-limits — and a naive search for "rate"
+ *      matches it, classifying every 429 as RPM. URLs are stripped first.
+ *
+ *   2. The daily quota is named in camel case with no spaces:
+ *      "GenerateRequestsPerDayPerProjectPerModel-FreeTier". A search for "per day"
+ *      does not find "PerDay". Punctuation and spacing are removed before matching,
+ *      so both spellings collapse to the same token.
+ *
+ * Misreading a daily exhaustion as a per-minute one is the expensive direction: retry
+ * treats RPM as waitable, so it backs off and tries again — spending more of a quota
+ * that is already gone.
  */
 export function classifyRateLimit(message = '') {
-  const text = String(message).toLowerCase();
-  if (text.includes('per day') || text.includes('daily') || text.includes('requests per day')) {
+  // Strip URLs before anything else; they carry words that look like signals.
+  const withoutUrls = String(message).replace(/https?:\/\/\S+/g, ' ');
+  const text = withoutUrls.toLowerCase();
+  // "PerDayPerProjectPerModel" and "per day" both become "perday".
+  const squashed = text.replace(/[^a-z0-9]+/g, '');
+
+  if (squashed.includes('perday') || squashed.includes('daily') || squashed.includes('requestsperday')) {
     return RATE_LIMIT_KINDS.RPD;
   }
-  if (text.includes('token')) return RATE_LIMIT_KINDS.TPM;
-  if (text.includes('per minute') || text.includes('rate')) return RATE_LIMIT_KINDS.RPM;
+  if (squashed.includes('token')) return RATE_LIMIT_KINDS.TPM;
+  if (squashed.includes('perminute') || text.includes('rate limit')) return RATE_LIMIT_KINDS.RPM;
   return RATE_LIMIT_KINDS.UNKNOWN;
 }
 
