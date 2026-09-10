@@ -1,0 +1,24 @@
+{
+  "id": "04-dense-senior",
+  "tests": "Recall at volume. Twelve labelled requirements in a long posting — the case where a model summarises instead of enumerating.",
+  "jd": "Staff Backend Engineer — Kestrel Payments (London / remote, UK)\n\nKestrel processes card payments for around 4,000 UK merchants. You would join the ledger team.\n\nWhat you will do:\n• Own the double-entry ledger service end to end\n• Lead the migration off our legacy settlement batch\n• Set the technical direction for the team's next two years\n\nRequirements:\n• 8+ years building backend services in production\n• Deep expertise in Go, or strong systems experience and the appetite to learn it fast\n• Postgres at scale: partitioning, query planning, and knowing when an index will not help\n• Event-driven architecture using Kafka or an equivalent log\n• A rigorous approach to idempotency and exactly-once semantics under retry\n• Experience designing and evolving public APIs, including versioning and deprecation\n• Track record of leading technical projects across more than one team\n• Ability to mentor senior engineers, not only juniors\n• Comfortable being the escalation point during a payments incident\n• Written communication strong enough to carry a design across the company\n• Understanding of PCI-DSS obligations as they apply to engineering\n• Familiarity with double-entry bookkeeping concepts\n\nDesirable:\n• Prior work in payments, banking or another regulated financial environment\n• Experience with gRPC\n\nWe interview with a take-home, a systems design session and two conversations.",
+  "expect": {
+    "must": [
+      "8+ years",
+      "go",
+      "postgres",
+      "kafka",
+      "idempotency",
+      "api",
+      "leading technical projects",
+      "mentor",
+      "incident",
+      "written communication",
+      "pci-dss",
+      "double-entry"
+    ],
+    "nice": ["payments", "grpc"],
+    "must_not_appear": ["kubernetes", "react", "machine learning", "aws lambda"]
+  },
+  "notes": "Twelve musts is the point: recall degrades as the list grows, and a model that returns six well-written requirements has lost half the marks. The three 'What you will do' bullets are responsibilities and must not appear as requirements — but they are not in must_not_appear because catching that is the role-profile step's job, not this one's."
+}

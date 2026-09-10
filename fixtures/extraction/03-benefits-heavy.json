@@ -1,0 +1,30 @@
+{
+  "id": "03-benefits-heavy",
+  "tests": "Invention. Most of this posting is perks and culture. None of it is a requirement, and the two real requirements are buried at the end.",
+  "jd": "Join Lumen! We are hiring a Data Analyst 🎉\n\nWhy you'll love it here:\n• Private health insurance from day one, including dental\n• Free lunch every day and a fully stocked kitchen\n• A remote-friendly culture — work from wherever you're happiest\n• £1,500 annual learning budget, no questions asked\n• 28 days holiday plus your birthday off\n• Cycle to work scheme and a gym subsidy\n• Regular team socials, and an annual offsite somewhere sunny\n• We're a flat organisation with no egos and a genuine growth mindset\n• Enhanced parental leave for all parents\n• Latest MacBook Pro and a home office budget\n\nOur values: curiosity, candour, and craft. We believe great analysts are made, not born, and we invest heavily in our people.\n\nThe role: you'll be writing SQL against our warehouse daily and building dashboards in Looker for the commercial team.",
+  "expect": {
+    "must": ["sql", "looker"],
+    "nice": [],
+    "must_not_appear": [
+      "health insurance",
+      "free lunch",
+      "remote-friendly culture",
+      "learning budget",
+      "holiday",
+      "cycle to work",
+      "gym",
+      "team socials",
+      "offsite",
+      "growth mindset",
+      "parental leave",
+      "macbook",
+      "home office",
+      "curiosity",
+      "candour",
+      "craft",
+      "flat organisation",
+      "no egos"
+    ]
+  },
+  "notes": "The pressure here is volume: eighteen enticing bullets and two real requirements. A model that treats 'we believe great analysts are made, not born' as a requirement about growth mindset has invented one. Values ARE company context and belong in the brief — they are not things the candidate must bring."
+}

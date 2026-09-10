@@ -1,0 +1,20 @@
+{
+  "id": "05-mixed-kinds",
+  "tests": "Kind assignment. Technical, behavioural and domain requirements sit side by side, several of them worded so the obvious reading is wrong.",
+  "jd": "Clinical Data Engineer — Aster Trials (Cambridge)\n\nAster runs data infrastructure for phase II and III oncology trials.\n\nRequirements:\n• 3+ years with Python and pandas for clinical data transformation\n• Working knowledge of CDISC SDTM and ADaM standards\n• Experience with GCP BigQuery or a comparable warehouse\n• You will present findings to clinicians who are not engineers, so you must be able to explain a data quality problem without jargon\n• Comfortable pushing back on a study team when a requested analysis would not be statistically sound\n• Understanding of GxP validation and why an audit trail matters\n• Familiarity with oncology endpoints such as PFS and ORR\n\nNice to have:\n• Experience with R\n• Prior work at a CRO",
+  "expect": {
+    "must": [
+      "python",
+      "pandas",
+      "cdisc",
+      "bigquery",
+      "explain",
+      "pushing back",
+      "gxp",
+      "oncology"
+    ],
+    "nice": ["r", "cro"],
+    "must_not_appear": ["sas", "phd", "machine learning", "aws"]
+  },
+  "notes": "The interesting ones: 'explain a data quality problem without jargon' is behavioural despite sitting in a technical list and mentioning data quality; 'pushing back when an analysis would not be statistically sound' is behavioural, not domain, even though it names statistics; CDISC, GxP and oncology endpoints are domain, not technical, though they read like tooling. 'Experience with R' is a one-letter label and exists to catch a scorer that matches substrings carelessly."
+}

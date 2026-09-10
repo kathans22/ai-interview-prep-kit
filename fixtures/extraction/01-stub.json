@@ -1,0 +1,22 @@
+{
+  "id": "01-stub",
+  "tests": "Padding. A two-line posting must produce a short list, not an invented one.",
+  "jd": "Backend Engineer\n\nWe need someone comfortable with Node and Postgres to own our booking API.",
+  "expect": {
+    "must": ["node", "postgres"],
+    "nice": [],
+    "must_not_appear": [
+      "docker",
+      "kubernetes",
+      "aws",
+      "typescript",
+      "react",
+      "microservices",
+      "ci/cd",
+      "agile",
+      "bachelor's degree",
+      "5 years"
+    ]
+  },
+  "notes": "The must_not_appear list is everything a model would plausibly assume about a backend role. None of it is in the posting. Two or three requirements is the correct answer; eight is a failure even if every one of them sounds reasonable."
+}

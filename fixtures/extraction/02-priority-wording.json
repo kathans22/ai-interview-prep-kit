@@ -1,0 +1,16 @@
+{
+  "id": "02-priority-wording",
+  "tests": "Priority wording. The posting states, in five different registers, which things are required and which are optional.",
+  "jd": "Platform Engineer — Meridian Health (Manchester, hybrid)\n\nWhat we need from you:\n• You must have 4+ years running production services on Linux\n• Strong experience with Terraform is essential\n• You will need solid Python for our tooling\n\nBonus points for Kubernetes operator experience.\nNice to have: familiarity with FHIR or HL7.\nIdeally you have worked in a regulated environment, but we will teach this.\nExposure to Grafana is a plus.\n\nWe run a weekly on-call rotation, shared across six engineers.",
+  "expect": {
+    "must": ["linux", "terraform", "python"],
+    "nice": ["kubernetes", "fhir", "regulated", "grafana"],
+    "must_not_appear": [
+      "docker swarm",
+      "aws certification",
+      "master's degree",
+      "10 years"
+    ]
+  },
+  "notes": "Five optional registers: 'bonus points for', 'nice to have', 'ideally', 'is a plus', 'we will teach this'. Three required registers: 'you must have', 'is essential', 'you will need'. Kubernetes landing as must is the single most likely failure and the one the brief names. The on-call line is a fact about the job, not a requirement — extracting it is acceptable, calling it a must is not."
+}
