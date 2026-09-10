@@ -24,6 +24,19 @@
  * A THIN POSTING PRODUCES A SHORT LIST. Two lines of JD cannot honestly yield eight
  * requirements, and padding one is worse than reporting the shortfall: every invented
  * requirement generates questions the candidate will waste preparation on.
+ *
+ * EVERY EXTRACTED REQUIREMENT IS CHECKED AGAINST THE POSTING BEFORE IT LEAVES.
+ * verifyEvidence tries three tiers — exact after normalising, substring either way,
+ * then content-word overlap — and a requirement that fails all three is DROPPED. This
+ * is the fabrication guard, and it is deliberately the last thing that happens rather
+ * than a hope pinned on the prompt.
+ *
+ * The drops are returned, never swallowed, because the drop RATE is the diagnostic that
+ * matters: a few percent is paraphrase, and above roughly 5% the prompt is producing
+ * evidence that is not in the posting. The fix at that point is the prompt, never the
+ * threshold — loosening it converts a visible extraction fault into an invisible
+ * fabrication-acceptance fault, and the requirements that slip through are exactly the
+ * ones no candidate should prepare from.
  */
 
 import { completeStructured } from '../llm/json.js';
@@ -31,6 +44,7 @@ import { safePrompt } from '../llm/safePrompt.js';
 import { object, arrayOf, str, enumOf } from '../llm/schema.js';
 import { REQUIREMENT_KINDS, REQUIREMENT_PRIORITIES } from '../contracts/kitSchema.js';
 import { nextIds } from '../contracts/ids.js';
+import { verifyEvidence, dropRate } from '../deterministic/verifyEvidence.js';
 import { badInput, invalidOutput, asGenerationError } from './errors.js';
 
 const STEP = 'extract-requirements';
@@ -227,9 +241,16 @@ function validateEntries(entries) {
  * @param {{ complete: Function }} options.provider
  * @param {() => void} [options.spend] budget hook
  * @param {(event: object) => void} [options.onRepair]
- * @returns {Promise<{ requirements: object[], thin: boolean, note: string, merged: object[] }>}
+ * @param {(drop: object) => void} [options.onDrop] called once per unsupported
+ *   requirement, so the eval harness sees every drop without core doing any logging
+ * @param {boolean} [options.verify=true] set false only to inspect raw extraction; a
+ *   real run must never skip the fabrication guard
+ * @returns {Promise<{
+ *   requirements: object[], thin: boolean, note: string, merged: object[],
+ *   dropped: object[], dropRate: number, evidence: object[]
+ * }>}
  */
-export async function extractRequirements(jdText, { provider, spend, onRepair } = {}) {
+export async function extractRequirements(jdText, { provider, spend, onRepair, onDrop, verify = true } = {}) {
   if (typeof jdText !== 'string' || jdText.trim() === '') {
     throw badInput(STEP, 'A job description is required.');
   }
@@ -263,10 +284,41 @@ export async function extractRequirements(jdText, { provider, spend, onRepair } 
   const { requirements: deduped, merged } = dedupeRequirements(entries);
 
   const capped = deduped.slice(0, MAX_REQUIREMENTS);
+
+  // Ids are assigned BEFORE verification so a drop can be reported by id, and so the
+  // surviving requirements keep the numbering they were extracted with. Renumbering
+  // after a drop would be tidier to look at and would mean r3 in the drop log is a
+  // different requirement from r3 in the kit.
   const ids = nextIds('r', capped.length, []);
-  const requirements = capped.map((entry, index) => ({ id: ids[index], ...entry }));
+  const withIds = capped.map((entry, index) => ({ id: ids[index], ...entry }));
+
+  let requirements = withIds;
+  let dropped = [];
+  let evidence = [];
+  let rate = 0;
+
+  if (verify) {
+    const verdict = verifyEvidence(trimmed, withIds, { onDrop });
+    const unsupported = new Set(verdict.unsupported);
+
+    requirements = withIds.filter((requirement) => !unsupported.has(requirement.id));
+    dropped = verdict.drops.map((drop) => {
+      const source = withIds.find((requirement) => requirement.id === drop.id);
+      return { ...drop, text: source?.text ?? '', priority: source?.priority ?? null };
+    });
+    evidence = verdict.matches;
+    rate = dropRate(verdict);
+  }
 
   const notes = [];
+  if (dropped.length > 0) {
+    const droppedMusts = dropped.filter((drop) => drop.priority === 'must').length;
+    notes.push(
+      `${dropped.length} requirement(s) were dropped because their evidence could not be ` +
+        `found in the posting (${(rate * 100).toFixed(0)}% of those extracted` +
+        `${droppedMusts > 0 ? `, ${droppedMusts} of them must-priority` : ''}).`
+    );
+  }
   if (thin) {
     notes.push(
       `The posting is ${trimmed.length} characters, below the ${THIN_JD_CHARS}-character ` +
@@ -282,5 +334,5 @@ export async function extractRequirements(jdText, { provider, spend, onRepair } 
     notes.push(`The posting was truncated to ${wrapped.includedLength} characters for the model.`);
   }
 
-  return { requirements, thin, note: notes.join(' '), merged };
+  return { requirements, thin, note: notes.join(' '), merged, dropped, dropRate: rate, evidence };
 }
