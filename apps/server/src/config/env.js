@@ -13,10 +13,18 @@
  *
  * @aipk/core never reads env. Config is built here, in the adapter, and injected into
  * core — so core stays pure and testable without a environment fixture.
+ *
+ * ERRORS STOP THE PROCESS; WARNINGS DO NOT. The distinction matters more than it looks.
+ * A missing GEMINI_MODEL cannot be worked around and must stop boot. A missing search
+ * key can: the search still runs against the no-op provider and records an honest empty
+ * result, which is a documented, degraded-but-correct mode. Treating the second as fatal
+ * would mean a fresh clone that copied .env.example verbatim refuses to start — the
+ * template ships that key blank on purpose.
  */
 
 /** Variables that must be present and non-empty in every environment. */
 export const REQUIRED_VARS = [
+  'NODE_ENV',
   'MONGODB_URI',
   'SESSION_SECRET',
   'GEMINI_API_KEY',
@@ -27,29 +35,59 @@ export const REQUIRED_VARS = [
   'LLM_MAX_OUTPUT_TOKENS',
   'MAX_LLM_CALLS_PER_KIT',
   'CASE_SOFT_DEADLINE_MS',
+  'BATCH_CONCURRENCY',
+  'IDEMPOTENCY_WINDOW_MS',
   'SEARCH_PROVIDER',
   'ALLOW_PRIVATE_HOSTS',
+  'CRAWL_MAX_PAGES',
+  'CRAWL_CONCURRENCY',
+  'FETCH_TIMEOUT_MS',
+  'FETCH_MAX_BYTES',
   'PORT',
   'WEB_ORIGIN',
 ];
 
 /** Present-but-optional variables, with the default applied when absent. */
 export const OPTIONAL_VARS = {
-  // Second, cheaper model for near-mechanical calls. Unset means one model for everything.
+  // Second, cheaper model for near-mechanical calls. Unset — or set equal to
+  // GEMINI_MODEL — means one model for everything.
   GEMINI_MODEL_LIGHT: null,
+  // Local fixture server port. Unused in production, so absence is not a fault.
+  FIXTURE_PORT: 8099,
+  // Crawl depth is the one crawl knob the template omits; core defaults to 2.
+  CRAWL_MAX_DEPTH: 2,
 };
 
-const POSITIVE_INTEGER_VARS = [
-  'GEMINI_RPM',
-  'GEMINI_TPM',
-  'GEMINI_RPD',
-  'LLM_MAX_OUTPUT_TOKENS',
-  'MAX_LLM_CALLS_PER_KIT',
-  'CASE_SOFT_DEADLINE_MS',
-  'PORT',
-];
+/**
+ * Integer variables and the range each must fall in.
+ *
+ * The ceilings are not decoration. A CRAWL_MAX_PAGES of 500 would blow the 150s case
+ * deadline long before it blew anything else, and a FETCH_TIMEOUT_MS of ten minutes
+ * would let one hanging route consume the entire batch window. Catching those at boot
+ * is the difference between a clear message and a mystifying timeout an hour later.
+ */
+const INTEGER_VARS = Object.freeze({
+  GEMINI_RPM: { min: 1, max: 10_000 },
+  GEMINI_TPM: { min: 1_000, max: 100_000_000 },
+  GEMINI_RPD: { min: 1, max: 10_000_000 },
+  LLM_MAX_OUTPUT_TOKENS: { min: 256, max: 1_000_000 },
+  MAX_LLM_CALLS_PER_KIT: { min: 1, max: 100 },
+  CASE_SOFT_DEADLINE_MS: { min: 1_000, max: 900_000 },
+  BATCH_CONCURRENCY: { min: 1, max: 16 },
+  IDEMPOTENCY_WINDOW_MS: { min: 0, max: 86_400_000 },
+  CRAWL_MAX_PAGES: { min: 1, max: 200 },
+  CRAWL_CONCURRENCY: { min: 1, max: 16 },
+  CRAWL_MAX_DEPTH: { min: 0, max: 6 },
+  FETCH_TIMEOUT_MS: { min: 500, max: 120_000 },
+  FETCH_MAX_BYTES: { min: 10_000, max: 100_000_000 },
+  PORT: { min: 1, max: 65_535 },
+  FIXTURE_PORT: { min: 0, max: 65_535 },
+});
 
 const BOOLEAN_VARS = ['ALLOW_PRIVATE_HOSTS'];
+
+/** Anything other than "production" is treated as local, per the template. */
+const KNOWN_ENVIRONMENTS = ['development', 'test', 'production'];
 
 const SEARCH_PROVIDERS = ['tavily', 'none'];
 
@@ -79,10 +117,17 @@ function isBlank(value) {
  * Validate a raw environment bag. Pure: no I/O, no process access, no exit.
  *
  * @param {Record<string, string|undefined>} source
- * @returns {{ ok: boolean, config: object|null, problems: Array<{name:string,code:string,message:string}> }}
+ * @returns {{
+ *   ok: boolean,
+ *   config: object|null,
+ *   problems: Array<{name:string,code:string,message:string}>,
+ *   warnings: Array<{name:string,code:string,message:string}>
+ * }} `problems` stop boot; `warnings` describe a degraded but working configuration and
+ *   are returned even on success, so a caller can print them without re-deriving them.
  */
 export function validateEnv(source = {}) {
   const problems = [];
+  const warnings = [];
 
   for (const name of REQUIRED_VARS) {
     if (isBlank(source[name])) {
@@ -91,15 +136,27 @@ export function validateEnv(source = {}) {
   }
 
   const numbers = {};
-  for (const name of POSITIVE_INTEGER_VARS) {
-    if (isBlank(source[name])) continue;
-    const parsed = Number(source[name]);
-    if (!Number.isInteger(parsed) || parsed <= 0) {
+  for (const [name, range] of Object.entries(INTEGER_VARS)) {
+    if (isBlank(source[name])) {
+      // Optional integers fall back to their documented default rather than to NaN.
+      if (name in OPTIONAL_VARS) numbers[name] = OPTIONAL_VARS[name];
+      continue;
+    }
+
+    const raw = String(source[name]).trim();
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed)) {
+      problems.push(
+        problem(name, 'CONFIG_NOT_AN_INTEGER', `${name} must be an integer, got "${raw}".`)
+      );
+      continue;
+    }
+    if (parsed < range.min || parsed > range.max) {
       problems.push(
         problem(
           name,
-          'CONFIG_NOT_A_POSITIVE_INTEGER',
-          `${name} must be a positive integer, got "${source[name]}".`
+          'CONFIG_OUT_OF_RANGE',
+          `${name} must be between ${range.min} and ${range.max}, got ${parsed}.`
         )
       );
       continue;
@@ -163,15 +220,104 @@ export function validateEnv(source = {}) {
       )
     );
   }
+  // A blank key is a WARNING, not an error. selectSearchProvider() falls back to the
+  // no-op provider, which still runs the step and records an honest empty result —
+  // "attempted and empty" scores, and only "never attempted" does not. Making this
+  // fatal would stop a fresh clone that copied .env.example verbatim, since the
+  // template ships this key blank on purpose.
   if (provider === 'tavily' && isBlank(source.SEARCH_API_KEY)) {
-    problems.push(
+    warnings.push(
       problem(
         'SEARCH_API_KEY',
-        'CONFIG_MISSING',
-        'SEARCH_API_KEY is required when SEARCH_PROVIDER=tavily. Set SEARCH_PROVIDER=none ' +
-          'to run without a key — the search still executes and records an honest empty result.'
+        'CONFIG_DEGRADED_SEARCH',
+        'SEARCH_PROVIDER=tavily but SEARCH_API_KEY is blank. Public-discussion search ' +
+          'will run against the no-op provider and record an empty result honestly. ' +
+          'Get a free key at https://tavily.com to search for real.'
       )
     );
+  }
+
+  const environment = isBlank(source.NODE_ENV) ? '' : String(source.NODE_ENV).trim().toLowerCase();
+  if (environment && !KNOWN_ENVIRONMENTS.includes(environment)) {
+    warnings.push(
+      problem(
+        'NODE_ENV',
+        'CONFIG_UNKNOWN_ENVIRONMENT',
+        `NODE_ENV "${environment}" is not one of ${KNOWN_ENVIRONMENTS.join(' | ')}. ` +
+          'Anything other than "production" is treated as local.'
+      )
+    );
+  }
+
+  // The SSRF gate, and the one combination that is dangerous rather than merely odd.
+  // ALLOW_PRIVATE_HOSTS is explicit and always wins; NODE_ENV only supplies the default
+  // when it is absent. In production, permitting private hosts turns the crawler into
+  // an SSRF hole pointed at the deploy's own network, so it is refused outright rather
+  // than warned about — a warning in a deploy log is a warning nobody reads.
+  const allowPrivateHosts = isBlank(source.ALLOW_PRIVATE_HOSTS)
+    ? environment !== 'production'
+    : String(source.ALLOW_PRIVATE_HOSTS).trim().toLowerCase() === 'true';
+
+  if (environment === 'production' && allowPrivateHosts) {
+    problems.push(
+      problem(
+        'ALLOW_PRIVATE_HOSTS',
+        'CONFIG_SSRF_RISK',
+        'ALLOW_PRIVATE_HOSTS must be false when NODE_ENV=production. Permitting private, ' +
+          'loopback and link-local addresses lets a supplied company URL reach the deploy\'s ' +
+          'own network and cloud metadata service. It is true locally only so the fixture ' +
+          'sites on localhost can be crawled.'
+      )
+    );
+  }
+
+  const modelLight = isBlank(source.GEMINI_MODEL_LIGHT)
+    ? null
+    : String(source.GEMINI_MODEL_LIGHT).trim();
+
+  // The template's convention for turning the split off is "set it equal to
+  // GEMINI_MODEL". Normalising that to null here means the provider has one thing to
+  // check rather than two, and cannot accidentally treat "no split" as a split.
+  const effectiveModelLight = modelLight && modelLight !== model ? modelLight : null;
+
+  if (effectiveModelLight) {
+    const unstableLight = UNSTABLE_MODEL_SUFFIXES.find((suffix) => effectiveModelLight.endsWith(suffix));
+    if (unstableLight) {
+      problems.push(
+        problem(
+          'GEMINI_MODEL_LIGHT',
+          'CONFIG_UNSTABLE_MODEL',
+          `GEMINI_MODEL_LIGHT "${effectiveModelLight}" ends in "${unstableLight}". Pin a specific stable model id.`
+        )
+      );
+    }
+    const retiredLight = RETIRED_MODEL_PREFIXES.find((prefix) => effectiveModelLight.startsWith(prefix));
+    if (retiredLight) {
+      problems.push(
+        problem(
+          'GEMINI_MODEL_LIGHT',
+          'CONFIG_RETIRED_MODEL',
+          `GEMINI_MODEL_LIGHT "${effectiveModelLight}" belongs to the ${retiredLight} family, which is shut down.`
+        )
+      );
+    }
+  }
+
+  // Budget sanity: five cases at twelve calls is sixty requests, and a daily ceiling
+  // below that cannot complete a single batch run. Worth saying at boot rather than
+  // discovering at case four.
+  if (Number.isInteger(numbers.GEMINI_RPD) && Number.isInteger(numbers.MAX_LLM_CALLS_PER_KIT)) {
+    const oneBatch = numbers.MAX_LLM_CALLS_PER_KIT * 5;
+    if (numbers.GEMINI_RPD < oneBatch) {
+      warnings.push(
+        problem(
+          'GEMINI_RPD',
+          'CONFIG_BUDGET_TIGHT',
+          `GEMINI_RPD is ${numbers.GEMINI_RPD}, below the ${oneBatch} requests a five-case ` +
+            'batch run can need. The run will degrade rather than fail, but it will degrade.'
+        )
+      );
+    }
   }
 
   if (!isBlank(source.SESSION_SECRET)) {
@@ -225,21 +371,23 @@ export function validateEnv(source = {}) {
   }
 
   if (problems.length > 0) {
-    return { ok: false, config: null, problems };
+    return { ok: false, config: null, problems, warnings };
   }
 
   return {
     ok: true,
     problems: [],
+    warnings,
     config: {
+      env: environment,
+      isProduction: environment === 'production',
       mongodbUri: String(source.MONGODB_URI).trim(),
       sessionSecret: String(source.SESSION_SECRET),
       gemini: {
         apiKey: String(source.GEMINI_API_KEY).trim(),
         model,
-        modelLight: isBlank(source.GEMINI_MODEL_LIGHT)
-          ? OPTIONAL_VARS.GEMINI_MODEL_LIGHT
-          : String(source.GEMINI_MODEL_LIGHT).trim(),
+        // null when unset OR when set equal to the main model — one "no split" value.
+        modelLight: effectiveModelLight,
         rpm: numbers.GEMINI_RPM,
         tpm: numbers.GEMINI_TPM,
         rpd: numbers.GEMINI_RPD,
@@ -248,11 +396,21 @@ export function validateEnv(source = {}) {
       budgets: {
         maxLlmCallsPerKit: numbers.MAX_LLM_CALLS_PER_KIT,
         caseSoftDeadlineMs: numbers.CASE_SOFT_DEADLINE_MS,
+        batchConcurrency: numbers.BATCH_CONCURRENCY,
+        idempotencyWindowMs: numbers.IDEMPOTENCY_WINDOW_MS,
       },
       retrieval: {
         searchProvider: provider,
         searchApiKey: isBlank(source.SEARCH_API_KEY) ? null : String(source.SEARCH_API_KEY).trim(),
-        allowPrivateHosts: booleans.ALLOW_PRIVATE_HOSTS,
+        allowPrivateHosts,
+        crawlMaxPages: numbers.CRAWL_MAX_PAGES,
+        crawlMaxDepth: numbers.CRAWL_MAX_DEPTH,
+        crawlConcurrency: numbers.CRAWL_CONCURRENCY,
+        fetchTimeoutMs: numbers.FETCH_TIMEOUT_MS,
+        fetchMaxBytes: numbers.FETCH_MAX_BYTES,
+      },
+      fixtures: {
+        port: numbers.FIXTURE_PORT,
       },
       server: {
         port: numbers.PORT,
@@ -277,15 +435,35 @@ export function formatProblems(problems) {
   return lines.join('\n');
 }
 
+/** Render warnings — a working configuration, with something worth knowing about it. */
+export function formatWarnings(warnings) {
+  if (warnings.length === 0) return '';
+  const lines = ['Configuration warnings (the run will proceed, degraded):', ''];
+  for (const { name, code, message } of warnings) {
+    lines.push(`  ${name}  [${code}]`);
+    lines.push(`    ${message}`);
+  }
+  return lines.join('\n');
+}
+
 /**
  * Boot-time entry point: validate or stop the process.
  * Side effects are injected so this is testable without killing the test runner.
  */
 export function loadConfigOrExit(
   source = process.env,
-  { onError = (text) => process.stderr.write(`${text}\n`), exit = (code) => process.exit(code) } = {}
+  {
+    onError = (text) => process.stderr.write(`${text}\n`),
+    onWarn = (text) => process.stderr.write(`${text}\n`),
+    exit = (code) => process.exit(code),
+  } = {}
 ) {
-  const { ok, config, problems } = validateEnv(source);
+  const { ok, config, problems, warnings } = validateEnv(source);
+
+  // Warnings are printed whether or not boot succeeds: a degraded search key is worth
+  // knowing about even in the run that also has a fatal fault.
+  if (warnings.length > 0 && typeof onWarn === 'function') onWarn(formatWarnings(warnings));
+
   if (!ok) {
     onError(formatProblems(problems));
     exit(1);
