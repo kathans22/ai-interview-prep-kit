@@ -1,0 +1,51 @@
+{
+  "fixtureId": "02-priority-wording",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-10T15:26:15.603Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "Must have 4+ years of experience running production services on Linux.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "You must have 4+ years running production services on Linux"
+      },
+      {
+        "text": "Strong experience with Terraform is required.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Strong experience with Terraform is essential"
+      },
+      {
+        "text": "Solid Python skills required for tooling.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "You will need solid Python for our tooling"
+      },
+      {
+        "text": "Experience with Kubernetes operators is a bonus.",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Bonus points for Kubernetes operator experience."
+      },
+      {
+        "text": "Familiarity with FHIR or HL7 healthcare standards.",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "Nice to have: familiarity with FHIR or HL7."
+      },
+      {
+        "text": "Experience working within a regulated environment is ideal.",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "Ideally you have worked in a regulated environment, but we will teach this."
+      },
+      {
+        "text": "Exposure to Grafana is desirable.",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Exposure to Grafana is a plus."
+      }
+    ]
+  }
+}

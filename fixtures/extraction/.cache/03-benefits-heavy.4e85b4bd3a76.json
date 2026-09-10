@@ -1,0 +1,21 @@
+{
+  "fixtureId": "03-benefits-heavy",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-10T15:26:41.276Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "Write SQL against the company warehouse daily.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "writing SQL against our warehouse daily"
+      },
+      {
+        "text": "Build dashboards in Looker for the commercial team.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "building dashboards in Looker for the commercial team"
+      }
+    ]
+  }
+}

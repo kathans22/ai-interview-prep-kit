@@ -1,0 +1,21 @@
+{
+  "fixtureId": "01-stub",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-10T15:22:16.863Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "Comfortable working with Node and Postgres.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "comfortable with Node and Postgres"
+      },
+      {
+        "text": "Ability to take ownership of the booking API.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "own our booking API"
+      }
+    ]
+  }
+}

@@ -1,0 +1,93 @@
+{
+  "fixtureId": "04-dense-senior",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-10T15:26:50.574Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "8+ years of experience building backend services in production.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "8+ years building backend services in production"
+      },
+      {
+        "text": "Deep expertise in Go, or strong systems experience and the appetite to learn it fast.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Deep expertise in Go, or strong systems experience and the appetite to learn it fast"
+      },
+      {
+        "text": "Postgres experience at scale, including partitioning, query planning, and knowing when an index will not help.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Postgres at scale: partitioning, query planning, and knowing when an index will not help"
+      },
+      {
+        "text": "Experience with event-driven architecture using Kafka or an equivalent log.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Event-driven architecture using Kafka or an equivalent log"
+      },
+      {
+        "text": "A rigorous approach to idempotency and exactly-once semantics under retry.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "A rigorous approach to idempotency and exactly-once semantics under retry"
+      },
+      {
+        "text": "Experience designing and evolving public APIs, including versioning and deprecation.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Experience designing and evolving public APIs, including versioning and deprecation"
+      },
+      {
+        "text": "Track record of leading technical projects across more than one team.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "Track record of leading technical projects across more than one team"
+      },
+      {
+        "text": "Ability to mentor senior engineers, not only juniors.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "Ability to mentor senior engineers, not only juniors"
+      },
+      {
+        "text": "Comfortable acting as the escalation point during a payments incident.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "Comfortable being the escalation point during a payments incident"
+      },
+      {
+        "text": "Written communication strong enough to carry a design across the company.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "Written communication strong enough to carry a design across the company"
+      },
+      {
+        "text": "Understanding of PCI-DSS obligations as they apply to engineering.",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Understanding of PCI-DSS obligations as they apply to engineering"
+      },
+      {
+        "text": "Familiarity with double-entry bookkeeping concepts.",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Familiarity with double-entry bookkeeping concepts"
+      },
+      {
+        "text": "Prior work in payments, banking or another regulated financial environment.",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "Prior work in payments, banking or another regulated financial environment"
+      },
+      {
+        "text": "Experience with gRPC.",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Experience with gRPC"
+      }
+    ]
+  }
+}

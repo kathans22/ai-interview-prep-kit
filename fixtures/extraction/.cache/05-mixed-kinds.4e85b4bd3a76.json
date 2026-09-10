@@ -1,0 +1,63 @@
+{
+  "fixtureId": "05-mixed-kinds",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-10T15:27:18.199Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "Have 3+ years of experience with Python and pandas for clinical data transformation.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "3+ years with Python and pandas for clinical data transformation"
+      },
+      {
+        "text": "Possess working knowledge of CDISC SDTM and ADaM standards.",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Working knowledge of CDISC SDTM and ADaM standards"
+      },
+      {
+        "text": "Have experience with GCP BigQuery or a comparable data warehouse.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Experience with GCP BigQuery or a comparable warehouse"
+      },
+      {
+        "text": "Be able to explain data quality problems to non-engineer clinicians without using jargon.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "You will present findings to clinicians who are not engineers, so you must be able to explain a data quality problem without jargon"
+      },
+      {
+        "text": "Be comfortable pushing back on a study team when a requested analysis would not be statistically sound.",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "Comfortable pushing back on a study team when a requested analysis would not be statistically sound"
+      },
+      {
+        "text": "Understand GxP validation and the importance of audit trails.",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Understanding of GxP validation and why an audit trail matters"
+      },
+      {
+        "text": "Be familiar with oncology endpoints such as PFS and ORR.",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Familiarity with oncology endpoints such as PFS and ORR"
+      },
+      {
+        "text": "Have experience with R.",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Experience with R"
+      },
+      {
+        "text": "Have prior work experience at a CRO.",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "Prior work at a CRO"
+      }
+    ]
+  }
+}

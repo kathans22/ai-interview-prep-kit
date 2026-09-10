@@ -86,7 +86,15 @@ export const REQUIREMENTS_SCHEMA = object({
   ),
 });
 
-const SYSTEM_INSTRUCTION = [
+/**
+ * The extraction prompt.
+ *
+ * Exported because the eval harness caches model responses keyed by a hash of this
+ * string: a scoring-logic change must re-score for free, while a PROMPT change must
+ * invalidate every cached response. Tying the cache key to the prompt itself makes
+ * that automatic rather than a thing someone has to remember.
+ */
+export const EXTRACTION_SYSTEM_INSTRUCTION = [
   'You extract hiring requirements from a job posting. You do not invent, infer or',
   'improve on what the posting says.',
   '',
@@ -268,7 +276,7 @@ export async function extractRequirements(jdText, { provider, spend, onRepair, o
     answer = await completeStructured({
       provider,
       request: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: EXTRACTION_SYSTEM_INSTRUCTION,
         contents: wrapped.text,
         responseSchema: REQUIREMENTS_SCHEMA,
       },
