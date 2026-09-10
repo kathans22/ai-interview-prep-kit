@@ -336,10 +336,86 @@ export async function generateQuestionsFor(
   });
 }
 
+/**
+ * The batching wrapper: up to five requirements of ONE category in one call.
+ *
+ * This is what the orchestrator uses on the normal path, and it exists for exactly one
+ * reason — the call budget. Twelve calls per kit against fifteen requirements across
+ * four categories is arithmetic that does not work one requirement at a time.
+ *
+ * WHY BATCHING HERE DOES NOT BREAK THE BRIEF, which forbids technical and behavioural
+ * questions coming from "the same call with the same instructions":
+ *   - it batches WITHIN a category, never across one. A technical call carries
+ *     technical instructions and a technical answer-outline style; behavioural is a
+ *     separate call with different instructions.
+ *   - it is the same code path as the canonical unit. Both call requestQuestions, so
+ *     the batched call is literally generateQuestionsFor with a longer requirement
+ *     list, not a second implementation that happens to look similar.
+ * The distinction the brief is protecting is that the four categories are genuinely
+ * different asks. They are, and CATEGORY_INSTRUCTIONS is where that lives.
+ *
+ * Requirements beyond the fifth are returned as `deferred` rather than silently
+ * dropped or quietly turned into a second call — spending an unplanned call is the
+ * orchestrator's decision to make against its budget, not this function's.
+ *
+ * @param {object} input
+ * @param {string} input.category
+ * @param {object[]} input.requirements
+ * @param {object} [input.roleContext]
+ * @param {object|null} [input.hiringProcess]
+ * @param {string[]} [input.existingIds]
+ * @param {object} options
+ * @param {{ complete: Function }} options.provider
+ * @param {() => void} [options.spend]
+ * @returns {Promise<{ questions: object[], rejected: object[], deferred: object[], batched: number }>}
+ */
+export async function generateQuestionsForCategory(
+  { category, requirements = [], roleContext = {}, hiringProcess = null, existingIds = [] } = {},
+  { provider, spend, onRepair } = {}
+) {
+  const step = `questions:${category}`;
+
+  if (!QUESTION_CATEGORIES.includes(category)) {
+    throw badInput(step, `category must be one of ${QUESTION_CATEGORIES.join(' | ')}, got "${category}".`);
+  }
+  if (!provider || typeof provider.complete !== 'function') {
+    throw badInput(step, 'A provider is required.');
+  }
+
+  const usable = (Array.isArray(requirements) ? requirements : []).filter(
+    (requirement) =>
+      requirement && typeof requirement.id === 'string' && String(requirement.text ?? '').trim() !== ''
+  );
+
+  // No requirements routed to this category is a normal outcome, not a failure, and
+  // must not spend a call: a kit with no domain requirements has no company-fit batch.
+  if (usable.length === 0) {
+    return { questions: [], rejected: [], deferred: [], batched: 0 };
+  }
+
+  const batch = usable.slice(0, MAX_REQUIREMENTS_PER_CALL);
+  const deferred = usable.slice(MAX_REQUIREMENTS_PER_CALL);
+
+  const { questions, rejected } = await requestQuestions({
+    requirements: batch,
+    category,
+    roleContext,
+    hiringProcess,
+    existingIds,
+    provider,
+    spend,
+    onRepair,
+    step,
+  });
+
+  return { questions, rejected, deferred, batched: batch.length };
+}
+
 /** Exported for the batching wrapper and for tests that assert prompts differ. */
 export const __internals = Object.freeze({
   buildInstruction,
   buildContents,
   requestQuestions,
   QUESTIONS_PER_REQUIREMENT,
+  CATEGORY_INSTRUCTIONS,
 });
