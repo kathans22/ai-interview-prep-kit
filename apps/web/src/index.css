@@ -1,0 +1,4 @@
+/* Tailwind v4 is CSS-first: this single import replaces the v3 directives and the
+   tailwind.config.js file. Theme tokens, when the design needs them, are declared here
+   in an @theme block rather than in a JavaScript config. */
+@import 'tailwindcss';

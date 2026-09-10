@@ -3,8 +3,23 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "React + Vite + Tailwind client. Placeholder manifest; the Vite scaffold lands in a later unit of this stage.",
+  "description": "React + Vite + Tailwind client. A thin view over the API; no business logic lives here.",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
-    "dev": "vite"
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@vitejs/plugin-react": "^6.1.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.2.2"
   }
 }
