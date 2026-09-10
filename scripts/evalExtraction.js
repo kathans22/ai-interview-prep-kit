@@ -14,6 +14,15 @@
  *   must-precision     extracted musts that were labelled     — inflating the must set
  *   priority accuracy  must/nice assigned as labelled         — "bonus points" read as required
  *   invention count    forbidden strings, or no evidence      — facts the posting never stated
+ *   evidence drops     rejected by verifyEvidence             — paraphrase instead of quotation
+ *   tier mix           tier 1 / 2 / 3 match distribution      — how literal the quoting is
+ *
+ * READ THE LAST TWO TOGETHER. A high drop rate, or a tier mix weighted to tier 3, both
+ * say the same thing: the model is paraphrasing where it was told to quote. That is a
+ * prompt fault and it costs recall, because a paraphrase that drifts far enough is
+ * dropped entirely and the requirement is simply gone. The dropped strings are printed
+ * in full for exactly this reason — so a legitimate requirement thrown away is visible
+ * rather than buried inside a percentage.
  *
  * CACHING. Each fixture's model response is cached to disk under a key that includes a
  * hash of the extraction prompt. Re-running after a SCORING change costs zero calls;
@@ -37,6 +46,7 @@ import {
   EXTRACTION_SYSTEM_INSTRUCTION,
 } from '@aipk/core/generation/extractRequirements.js';
 import { createGeminiProviderFromEnv } from '@aipk/core/llm/provider.js';
+import { EVIDENCE_TIERS } from '@aipk/core/deterministic/verifyEvidence.js';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURES = join(ROOT, 'fixtures', 'extraction');
@@ -48,6 +58,7 @@ export const TARGETS = Object.freeze({
   mustPrecision: 0.85,
   priorityAccuracy: 0.9,
   inventions: 0,
+  dropRate: 0.05,
 });
 
 const args = new Set(process.argv.slice(2));
@@ -175,7 +186,7 @@ function cachingProvider(real, fixtureId) {
 
 /** Score one fixture. */
 function scoreCase(fixture, extraction) {
-  const { requirements } = extraction;
+  const { requirements, dropped, evidence } = extraction;
   const expect = fixture.expect ?? {};
   const labelledMusts = expect.must ?? [];
   const labelledNices = expect.nice ?? [];
@@ -213,9 +224,25 @@ function scoreCase(fixture, extraction) {
     }
   }
 
+  // --- tier mix: how literally the model quoted -----------------------------
+  const tiers = { 1: 0, 2: 0, 3: 0, none: 0 };
+  for (const match of evidence ?? []) {
+    if (match.tier === EVIDENCE_TIERS.EXACT) tiers[1] += 1;
+    else if (match.tier === EVIDENCE_TIERS.SUBSTRING) tiers[2] += 1;
+    else if (match.tier === EVIDENCE_TIERS.JACCARD) tiers[3] += 1;
+    else tiers.none += 1;
+  }
+
+  // Drop rate is over everything EXTRACTED, not everything kept: dividing by the
+  // survivors would shrink the denominator exactly as the problem got worse.
+  const attempted = requirements.length + dropped.length;
+
   return {
     id: fixture.id,
     kept: requirements.length,
+    dropped,
+    dropRate: attempted === 0 ? 0 : dropped.length / attempted,
+    tiers,
     mustRecall: labelledMusts.length === 0 ? 1 : foundMusts.length / labelledMusts.length,
     mustPrecision: extractedMusts.length === 0 ? 1 : justifiedMusts.length / extractedMusts.length,
     priorityAccuracy: priorityChecks.length === 0 ? 1 : priorityCorrect.length / priorityChecks.length,
@@ -281,11 +308,11 @@ async function main() {
   }
 
   // --- per-case table --------------------------------------------------------
-  const header = ['case', 'kept', 'recall', 'prec', 'prio', 'inv'];
+  const header = ['case', 'kept', 'recall', 'prec', 'prio', 'inv', 'drops', 't1/t2/t3'];
   process.stdout.write(
-    `${header[0].padEnd(22)}${header[1].padStart(5)}${header[2].padStart(9)}${header[3].padStart(8)}${header[4].padStart(8)}${header[5].padStart(6)}\n`
+    `${header[0].padEnd(22)}${header[1].padStart(5)}${header[2].padStart(9)}${header[3].padStart(8)}${header[4].padStart(8)}${header[5].padStart(6)}${header[6].padStart(8)}   ${header[7]}\n`
   );
-  process.stdout.write(`${'-'.repeat(58)}\n`);
+  process.stdout.write(`${'-'.repeat(78)}\n`);
 
   for (const result of results) {
     process.stdout.write(
@@ -294,14 +321,19 @@ async function main() {
         `${pct(result.mustRecall)}${mark(result.mustRecall, TARGETS.mustRecall)}`.padStart(9) +
         `${pct(result.mustPrecision)}${mark(result.mustPrecision, TARGETS.mustPrecision)}`.padStart(8) +
         `${pct(result.priorityAccuracy)}${mark(result.priorityAccuracy, TARGETS.priorityAccuracy)}`.padStart(8) +
-        `${`${result.inventions.length}${result.inventions.length > 0 ? '!' : ' '}`.padStart(6)}\n`
+        `${result.inventions.length}${result.inventions.length > 0 ? '!' : ' '}`.padStart(6) +
+        `${pct(result.dropRate)}${mark(result.dropRate, TARGETS.dropRate, false)}`.padStart(8) +
+        `   ${result.tiers[1]}/${result.tiers[2]}/${result.tiers[3]}\n`
     );
   }
 
   // --- detail worth reading --------------------------------------------------
   for (const result of results) {
     const hasDetail =
-      result.missedMusts.length > 0 || result.priorityWrong.length > 0 || result.inventions.length > 0;
+      result.missedMusts.length > 0 ||
+      result.priorityWrong.length > 0 ||
+      result.inventions.length > 0 ||
+      result.dropped.length > 0;
     if (!hasDetail) continue;
 
     process.stdout.write(`\n${result.id}\n`);
@@ -336,7 +368,12 @@ async function main() {
     mustPrecision: mean((r) => r.mustPrecision),
     priorityAccuracy: mean((r) => r.priorityAccuracy),
     inventions: results.reduce((total, r) => total + r.inventions.length, 0),
+    dropRate: mean((r) => r.dropRate),
   };
+  const tiers = results.reduce(
+    (total, r) => ({ 1: total[1] + r.tiers[1], 2: total[2] + r.tiers[2], 3: total[3] + r.tiers[3] }),
+    { 1: 0, 2: 0, 3: 0 }
+  );
 
   const line = (label, value, target, higherIsBetter = true) => {
     const ok = higherIsBetter ? value >= target : value <= target;
@@ -351,9 +388,27 @@ async function main() {
   process.stdout.write(line('must-recall', totals.mustRecall, TARGETS.mustRecall));
   process.stdout.write(line('must-precision', totals.mustPrecision, TARGETS.mustPrecision));
   process.stdout.write(line('priority accuracy', totals.priorityAccuracy, TARGETS.priorityAccuracy));
+  process.stdout.write(line('evidence drop rate', totals.dropRate, TARGETS.dropRate, false));
   process.stdout.write(
     `  ${totals.inventions === 0 ? 'PASS' : 'FAIL'}  ${'invention count'.padEnd(20)} ${String(totals.inventions).padStart(5)}   target = 0 (non-negotiable)\n`
   );
+
+  const tierTotal = tiers[1] + tiers[2] + tiers[3];
+  process.stdout.write(
+    `\n  tier mix: ${tiers[1]} exact / ${tiers[2]} substring / ${tiers[3]} overlap` +
+      (tierTotal > 0 ? `  (${pct((tiers[1] + tiers[2]) / tierTotal)} quoted literally)\n` : '\n')
+  );
+  // The early-warning signal. Recall can still look fine while the model drifts towards
+  // paraphrase, because tier 3 accepts a loose match — right up until a paraphrase
+  // drifts past the threshold and the requirement disappears. A tier mix sliding
+  // towards overlap says the prompt is losing its grip on "quote verbatim" BEFORE the
+  // drop rate rises far enough to notice.
+  if (tierTotal > 0 && tiers[3] / tierTotal > 0.3) {
+    process.stdout.write(
+      '  NOTE: a third or more of matches needed word-overlap. The model is paraphrasing\n' +
+        '        where it was told to quote. Fix the prompt, not the threshold.\n'
+    );
+  }
 
   // Invention is the only non-negotiable, so it alone decides the exit code — the
   // others are targets to iterate against, and a harness that refused to run until
@@ -366,7 +421,8 @@ async function main() {
   const belowTarget =
     totals.mustRecall < TARGETS.mustRecall ||
     totals.mustPrecision < TARGETS.mustPrecision ||
-    totals.priorityAccuracy < TARGETS.priorityAccuracy;
+    totals.priorityAccuracy < TARGETS.priorityAccuracy ||
+    totals.dropRate > TARGETS.dropRate;
 
   process.stdout.write(
     belowTarget
