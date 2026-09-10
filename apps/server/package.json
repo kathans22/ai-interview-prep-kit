@@ -1,0 +1,14 @@
+{
+  "name": "@aipk/server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Express API and the batch CLI. Both are thin adapters over @aipk/core.",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "@aipk/core": "*"
+  }
+}

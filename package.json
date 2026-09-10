@@ -1,0 +1,23 @@
+{
+  "name": "ai-interview-prep-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Research-driven interview preparation kits generated from a job description and a company URL.",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "evaluate": "node apps/server/src/cli/evaluate.js",
+    "eval:extraction": "node scripts/evalExtraction.js",
+    "smoke": "node scripts/smoke.js",
+    "dev:server": "npm run dev --workspace @aipk/server",
+    "dev:web": "npm run dev --workspace @aipk/web",
+    "test": "node --test"
+  }
+}

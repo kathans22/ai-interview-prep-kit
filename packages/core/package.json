@@ -1,0 +1,15 @@
+{
+  "name": "@aipk/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The single implementation: contracts, deterministic logic, retrieval, generation and orchestration. The server route and the CLI are thin adapters over this package.",
+  "exports": {
+    "./contracts/*": "./contracts/*.js",
+    "./deterministic/*": "./deterministic/*.js",
+    "./llm/*": "./llm/*.js",
+    "./retrieval/*": "./retrieval/*.js",
+    "./generation/*": "./generation/*.js",
+    "./orchestrator/*": "./orchestrator/*.js"
+  }
+}

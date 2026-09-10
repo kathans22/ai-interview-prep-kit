@@ -1,0 +1,10 @@
+{
+  "name": "@aipk/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "React + Vite + Tailwind client. Placeholder manifest; the Vite scaffold lands in a later unit of this stage.",
+  "scripts": {
+    "dev": "vite"
+  }
+}
