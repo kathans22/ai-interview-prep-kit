@@ -11,5 +11,8 @@
     "./retrieval/*": "./retrieval/*.js",
     "./generation/*": "./generation/*.js",
     "./orchestrator/*": "./orchestrator/*.js"
+  },
+  "dependencies": {
+    "@google/genai": "^2.21.0"
   }
 }
