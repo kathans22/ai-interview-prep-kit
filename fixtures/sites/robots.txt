@@ -1,0 +1,6 @@
+# Fixture robots.txt, served at the origin root where a real crawler looks for it.
+User-agent: *
+Disallow: /acme/login
+Disallow: /acme/legal/
+Disallow: /broken/forbidden
+Crawl-delay: 0

@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Halstead Freight — home</title></head>
+<body>
+<nav>
+  <a href="/broken/">Home</a>
+  <a href="/broken/careers">Careers</a>
+  <a href="/broken/about">About</a>
+</nav>
+
+<main>
+  <h1>Halstead Freight</h1>
+  <p>
+    A site that is mostly broken, on purpose. Every link below fails in a different way,
+    so the crawler has to record five different skip reasons and still finish.
+  </p>
+
+  <ul>
+    <li><a href="/broken/careers">Careers</a> — 404, the page a path-guessing crawler would assume exists</li>
+    <li><a href="/broken/jobs/engineering">Engineering jobs</a> — 404 one level deeper</li>
+    <li><a href="/broken/slow">Our hiring process</a> — never responds, must hit the fetch timeout</li>
+    <li><a href="/broken/loop">Join the team</a> — redirects to itself forever</li>
+    <li><a href="/broken/error">Interview guide</a> — always 500, so the retry path runs</li>
+    <li><a href="/broken/brochure.pdf">Hiring brochure (PDF)</a> — wrong content type</li>
+    <li><a href="/broken/forbidden">Internal hiring notes</a> — disallowed by robots.txt</li>
+    <li><a href="/broken/about">About us</a> — the one page that actually works</li>
+  </ul>
+</main>
+</body>
+</html>
