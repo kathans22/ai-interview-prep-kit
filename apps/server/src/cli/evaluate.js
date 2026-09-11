@@ -155,11 +155,17 @@ async function defaultRunBatch({ cases, options, stderr }) {
 
   stderr.write(`\n${formatRunSummary(entries, elapsedMs)}\n`);
 
-  // The envelope write arrives in unit 4. Saying so beats writing a half-shaped file that
-  // a grader would read as the real output.
-  stderr.write(`\nNot yet written to ${options.output}: the envelope writer is the next unit.\n`);
+  const { buildEnvelope, writeEnvelope } = await import('./envelope.js');
+  const written = await writeEnvelope(options.output, buildEnvelope(entries));
+  stderr.write(`Wrote ${written.bytes} bytes to ${written.path}\n`);
 
-  return entries.some((entry) => entry.status === 'failed') ? EXIT.RUN_FAILED : EXIT.OK;
+  // A run where every case failed exits non-zero: nothing usable was produced and a
+  // green exit code would let a broken configuration pass a CI check. A run with SOME
+  // failures still exits 0 — the envelope is complete and correct, and it says which
+  // cases failed and why. Failing the whole command for one dead company URL would make
+  // the exit code useless as a signal about the command itself.
+  const ok = entries.filter((entry) => entry.status === 'ok').length;
+  return ok === 0 ? EXIT.RUN_FAILED : EXIT.OK;
 }
 
 /** Thrown when config validation failed, so a bad .env does not call process.exit mid-run. */
