@@ -28,6 +28,7 @@ import { createPageCache } from '../retrieval/pageCache.js';
 import { allocate } from '../deterministic/scheduleAllocator.js';
 import { STEPS, STATUS, createReporter } from './steps.js';
 import { researchFromJd, researchCompany, generateQuestions } from './research.js';
+import { runCoverageLoop } from './coverageLoop.js';
 
 /** Defaults matching Block C, overridable by the adapter's config. */
 export const BUILD_DEFAULTS = Object.freeze({
@@ -123,6 +124,22 @@ export async function buildKit(input, deps = {}, hooks = {}) {
   // --- step 8: questions ----------------------------------------------------
   await generateQuestions({ deps: resolved, reporter, budget, state });
 
+  // --- steps 9-10: coverage, in code, then fill exactly what is missing -----
+  const coverage = await runCoverageLoop({
+    requirements: state.requirements,
+    questions: state.questions,
+    deps: resolved,
+    reporter,
+    budget,
+    state,
+    governor: deps.governor,
+  });
+
+  state.questions = coverage.questions;
+  state.coveragePasses = coverage.passes;
+  state.uncovered = coverage.uncovered;
+  state.notes.push(...coverage.notes);
+
   // --- step 12: schedule (code, never a prompt) -----------------------------
   reporter.emit(STEPS.SCHEDULE, STATUS.STARTED, { days });
   const schedule = allocate({
@@ -152,7 +169,12 @@ export async function buildKit(input, deps = {}, hooks = {}) {
   kit.questions = state.questions;
   kit.flashcards = state.flashcards;
   kit.schedule = schedule;
-  kit.coverage = { uncovered_requirement_ids: [], passes: state.coveragePasses };
+  // Reality, not intention: the passes that actually ran, and the gaps that actually
+  // remain. Both are the kit telling the truth about itself.
+  kit.coverage = {
+    uncovered_requirement_ids: state.uncovered ?? [],
+    passes: state.coveragePasses,
+  };
 
   reporter.emit(STEPS.ASSEMBLE, STATUS.DONE, {
     requirements: kit.role.requirements.length,
