@@ -37,6 +37,12 @@ import {
   fromCheckpoint,
 } from './checkpoints.js';
 import { restorePageCache } from '../retrieval/pageCache.js';
+import { validateKit, formatValidationErrors } from '../contracts/validateKit.js';
+import {
+  verifySchedule,
+  formatScheduleViolations,
+  SCHEDULE_VIOLATIONS,
+} from '../deterministic/verifySchedule.js';
 
 /** Defaults matching Block C, overridable by the adapter's config. */
 export const BUILD_DEFAULTS = Object.freeze({
@@ -261,8 +267,65 @@ export async function buildKit(input, deps = {}, hooks = {}) {
     questions: kit.questions.length,
   });
 
+  // --- step 14: BOTH checks, and both must pass -----------------------------
+  //
+  // validateKit answers "is this the contract?" — every key present, every enum spelled
+  // exactly, every id reference resolving. verifySchedule answers a different question:
+  // "does this schedule make sense?" — the right number of days, every must reachable,
+  // integer minutes, harder material earlier.
+  //
+  // Running only one leaves a whole class of fault able to ship. A kit can be perfectly
+  // shaped and still schedule day 3 before day 1, drop half its questions, or never
+  // mention a must-have; and a semantically sensible schedule can still carry an
+  // Americanised enum that fails the contract. verifySchedule imports nothing from the
+  // allocator, so agreement between them is evidence rather than a tautology.
+  //
+  // This is the last gate before a kit is handed to a caller, so a failure here IS
+  // fatal. Everything else in this pipeline degrades, but a kit that does not satisfy
+  // its own contract is not a degraded kit — it is a wrong one, and returning it would
+  // push the fault downstream into the batch output where it is someone else's problem.
+  reporter.emit(STEPS.VALIDATE, STATUS.STARTED);
+
+  const shape = validateKit(kit);
+  const semantics = verifySchedule(kit);
+
+  // A must with no question at all is a coverage gap the loop already reported honestly,
+  // not a scheduling fault — the kit says so in coverage.uncovered_requirement_ids. It
+  // must not fail validation, or an honestly-degraded kit would become a failed case.
+  const schedulingViolations = semantics.violations.filter(
+    (violation) => violation.code !== SCHEDULE_VIOLATIONS.MUST_HAS_NO_QUESTION
+  );
+
+  if (!shape.valid || schedulingViolations.length > 0) {
+    reporter.emit(STEPS.VALIDATE, STATUS.FAILED, {
+      shapeErrors: shape.errors.length,
+      scheduleViolations: schedulingViolations.length,
+    });
+
+    throw new BuildFailedError(
+      'The assembled kit did not pass its own checks, so it was not returned.\n' +
+        (shape.valid ? '' : `${formatValidationErrors(shape.errors)}\n`) +
+        (schedulingViolations.length === 0 ? '' : formatScheduleViolations(schedulingViolations)),
+      {
+        code: 'BUILD_INVALID_KIT',
+        shapeErrors: shape.errors,
+        scheduleViolations: schedulingViolations,
+      }
+    );
+  }
+
+  const coverageViolations = semantics.violations.filter(
+    (violation) => violation.code === SCHEDULE_VIOLATIONS.MUST_HAS_NO_QUESTION
+  );
+  if (coverageViolations.length > 0) {
+    reporter.emit(STEPS.VALIDATE, STATUS.DEGRADED, { uncoveredMusts: coverageViolations.length });
+  } else {
+    reporter.emit(STEPS.VALIDATE, STATUS.DONE, {});
+  }
+
   return {
     kit,
+    validation: { shape, schedule: semantics },
     notes: state.notes,
     events: reporter.events(),
     budget: budget.report(),
