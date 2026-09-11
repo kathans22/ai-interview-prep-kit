@@ -259,17 +259,34 @@ export function createLimiter({
 }
 
 /**
- * The process-wide limiter.
+ * The process-wide limiters — ONE PER MODEL.
  *
- * Held in a module-level slot rather than created at import time so configuration can be
- * applied once, at boot, from the adapter that read the environment. Every consumer
- * calls getLimiter() and gets the same object.
+ * Held in module-level slots rather than created at import time so configuration can be
+ * applied once, at boot, from the adapter that read the environment.
+ *
+ * WHY PER MODEL, WHEN BLOCK C SAYS "ONE LIMITER". Block C's rule exists to stop two
+ * limiters pacing the SAME model, because two buckets at "5 RPM" send ten requests a
+ * minute. That danger is real and this preserves it: one instance per model, and a
+ * second `configureLimiterFor` on the same model still throws.
+ *
+ * But Gemini's RPM, TPM and RPD are all per-model-per-project. Counting a light model's
+ * requests against the main model's daily ceiling would make the two-model split buy
+ * exactly nothing — the whole point of routing mechanical calls elsewhere is that
+ * "elsewhere" has its own quota. One shared counter would refuse the 21st request of the
+ * day even when 20 of them went to a model with a separate allowance.
+ *
+ * So: one limiter per model id, and `getLimiter(model)` is how a caller reaches the
+ * right one. Callers that pass no model get the default, which is what every existing
+ * call site did and still does.
  */
 let shared = null;
 
+/** model id -> limiter, for any model configured separately from the default. */
+const perModel = new Map();
+
 /**
- * Configure and return the singleton. Calling it twice with different settings is a
- * programming error: it would mean part of the process is throttling against different
+ * Configure and return the default singleton. Calling it twice with different settings is
+ * a programming error: it would mean part of the process is throttling against different
  * numbers, which is the two-limiter bug wearing a disguise.
  */
 export function configureLimiter(options = {}) {
@@ -321,9 +338,44 @@ function createPassThroughLimiter() {
   };
 }
 
-/** Whether boot has configured the real limiter. Entry points should assert this. */
-export function isLimiterConfigured() {
-  return shared !== null;
+/**
+ * Configure a limiter for ONE model, separate from the default.
+ *
+ * Used for the light-model split: RPM, TPM and RPD are all per-model-per-project on
+ * Gemini, so a second model has its own allowance and must have its own counters.
+ *
+ * @param {string} model the model id, matched against `provider.model`
+ * @param {object} options same shape as `createLimiter`
+ */
+export function configureLimiterFor(model, options = {}) {
+  const key = String(model ?? '').trim();
+  if (key === '') {
+    throw new LlmError(
+      LLM_ERROR_CODES.NOT_CONFIGURED,
+      'configureLimiterFor needs a model id. A limiter keyed by an empty string would be ' +
+        'reachable by accident from any caller that forgot to pass a model.'
+    );
+  }
+  if (perModel.has(key)) {
+    throw new LlmError(
+      LLM_ERROR_CODES.NOT_CONFIGURED,
+      `A limiter for "${key}" is already configured. One instance per model — two buckets ` +
+        'at the same RPM send twice the configured rate. Use resetLimiterForTests() in tests.'
+    );
+  }
+  const limiter = createLimiter(options);
+  perModel.set(key, limiter);
+  return limiter;
+}
+
+/**
+ * Whether boot has configured a real limiter.
+ *
+ * @param {string} [model] ask about one model; omit for the default
+ */
+export function isLimiterConfigured(model) {
+  if (model === undefined) return shared !== null;
+  return perModel.has(String(model));
 }
 
 /**
@@ -334,7 +386,13 @@ export function isLimiterConfigured() {
  * NOT cached into `shared`, so a later `configureLimiter` still succeeds rather than
  * throwing "already configured" because something read the limiter during import.
  */
-export function getLimiter() {
+export function getLimiter(model) {
+  // A model with its own configured limiter gets it. Everything else falls through to
+  // the default, which is what every call site did before the split existed.
+  if (model !== undefined) {
+    const own = perModel.get(String(model));
+    if (own) return own;
+  }
   return shared ?? passThrough;
 }
 
@@ -343,4 +401,5 @@ const passThrough = createPassThroughLimiter();
 /** Test-only. Production code must never call this. */
 export function resetLimiterForTests() {
   shared = null;
+  perModel.clear();
 }

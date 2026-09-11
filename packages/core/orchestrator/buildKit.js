@@ -234,7 +234,13 @@ export async function buildKit(input, deps = {}, hooks = {}) {
           questions: state.questions,
           existingIds: state.flashcards.map((card) => card.id),
         },
-        { provider: resolved.provider, spend: () => budget.spend(STEPS.FLASHCARDS) }
+        {
+          // The LIGHT model when configured: a flashcard restates material the kit
+          // already contains as a front and a back. It is the most mechanical call
+          // in the pipeline and the cheapest to move off the scored model.
+          provider: resolved.providerLight ?? resolved.provider,
+          spend: () => budget.spend(STEPS.FLASHCARDS),
+        }
       );
       state.flashcards = result.flashcards;
       reporter.emit(STEPS.FLASHCARDS, result.flashcards.length > 0 ? STATUS.DONE : STATUS.DEGRADED, {

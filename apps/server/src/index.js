@@ -133,6 +133,9 @@ export async function start({ env = process.env, provider: injectedProvider = nu
         input,
         {
           provider: runContext.provider,
+          // The light model for mechanical steps, when configured. Null otherwise, and
+          // every call site falls back to the main provider.
+          providerLight: runContext.providerLight,
           fetcher: runContext.fetcher,
           robots: runContext.robots,
           cache: runContext.cache,

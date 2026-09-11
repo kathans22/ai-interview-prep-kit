@@ -146,7 +146,12 @@ export async function researchCompany({ companyUrl, deps, reporter, budget, stat
       const found = await findHiringPage({
         candidates: state.crawl.hiringPageCandidates,
         pages: state.crawl.pages,
-        provider,
+        // The LIGHT model when one is configured. This call is mechanical: the crawler
+        // has already ranked the candidates deterministically and the model only
+        // confirms the pick, so it does not need the model the extraction eval was
+        // tuned against — and every call moved here is one left on the main model's
+        // daily ceiling. Falls back to the main provider when no split is configured.
+        provider: deps.providerLight ?? provider,
         spend: () => budget.spend(STEPS.HIRING_PAGE),
       });
       state.hiringPage = found.page;

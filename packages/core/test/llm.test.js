@@ -31,6 +31,7 @@ import {
   getLimiter,
   resetLimiterForTests,
   isLimiterConfigured,
+  configureLimiterFor,
   estimateTokens,
 } from '../llm/limiter.js';
 import { withRetry, isRetryable, backoffDelay } from '../llm/retry.js';
@@ -779,4 +780,73 @@ test('failure switches fire the configured number of times, then stop', async ()
   await assert.rejects(provider.complete({ systemInstruction: 'i', contents: 'c', step: 's' }));
   await assert.rejects(provider.complete({ systemInstruction: 'i', contents: 'c', step: 's' }));
   assert.deepEqual((await provider.complete({ systemInstruction: 'i', contents: 'c', step: 's' })).data, { ok: true });
+});
+
+// ===========================================================================
+// The two-model split.
+//
+// The whole point is SEPARATE QUOTA. Gemini's RPM, TPM and RPD are all per model, so
+// routing mechanical calls to a lighter model only buys anything if that model's
+// requests are counted against its own ceiling. One shared counter would refuse the
+// 21st request of the day even when 20 of them went somewhere with its own allowance.
+// ===========================================================================
+
+test('each model gets its own limiter, and its own daily ceiling', async () => {
+  resetLimiterForTests();
+
+  configureLimiter({ rpm: 1000, tpm: 1_000_000, rpd: 2 });
+  configureLimiterFor('light-model', { rpm: 1000, tpm: 1_000_000, rpd: 5 });
+
+  const main = createFakeProvider({ responses: { s: { ok: true } } });
+  main.model = 'main-model';
+  const light = createFakeProvider({ responses: { s: { ok: true } } });
+  light.model = 'light-model';
+
+  const call = (provider) =>
+    completeStructured({
+      provider,
+      request: { systemInstruction: 'i', contents: 'c', responseSchema: {} },
+      step: 's',
+    });
+
+  // Spend the main model's entire daily allowance.
+  await call(main);
+  await call(main);
+  await assert.rejects(call(main), (error) => error.code === LLM_ERROR_CODES.RATE_LIMITED);
+
+  // The light model is untouched by that. This is the assertion the split exists for:
+  // before per-model limiters, this call would have been refused too, and moving work
+  // to a second model would have bought exactly nothing.
+  const stillWorks = await call(light);
+  assert.deepEqual(stillWorks, { ok: true });
+
+  assert.equal(getLimiter('main-model').report().remainingToday, 0);
+  assert.equal(getLimiter('light-model').report().remainingToday, 4);
+
+  resetLimiterForTests();
+});
+
+test('an unconfigured model falls back to the default limiter', async () => {
+  resetLimiterForTests();
+  const shared = configureLimiter({ rpm: 1000, tpm: 1_000_000, rpd: 9 });
+
+  // No limiter was configured for this model, so it must not silently become unpaced —
+  // it draws on the default, which is what every call site did before the split.
+  assert.equal(getLimiter('some-model-nobody-configured'), shared);
+  assert.equal(getLimiter(), shared);
+  assert.equal(isLimiterConfigured('some-model-nobody-configured'), false);
+
+  resetLimiterForTests();
+});
+
+test('configuring one model twice is refused, exactly as the default is', () => {
+  resetLimiterForTests();
+  configureLimiterFor('twice', { rpm: 5, tpm: 100, rpd: 5 });
+
+  // Block C's actual rule: two buckets at the same RPM send twice the configured rate.
+  // Per-model limiters relax "one limiter" to "one per model", not to "as many as you like".
+  assert.throws(() => configureLimiterFor('twice', { rpm: 5, tpm: 100, rpd: 5 }));
+  assert.throws(() => configureLimiterFor('', { rpm: 5, tpm: 100, rpd: 5 }));
+
+  resetLimiterForTests();
 });

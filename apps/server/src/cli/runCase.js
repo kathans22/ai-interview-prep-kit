@@ -53,7 +53,7 @@ import { createSourceLedger } from '@aipk/core/retrieval/sourceLedger.js';
 import { selectSearchProvider } from '@aipk/core/retrieval/searchPublicDiscussion.js';
 import { createBudget } from '@aipk/core/llm/budget.js';
 import { createTimeGovernor } from '@aipk/core/orchestrator/timeGovernor.js';
-import { configureLimiter, isLimiterConfigured } from '@aipk/core/llm/limiter.js';
+import { configureLimiter, configureLimiterFor, isLimiterConfigured } from '@aipk/core/llm/limiter.js';
 import { createGeminiProvider } from '@aipk/core/llm/provider.js';
 import { LLM_ERROR_CODES } from '@aipk/core/llm/provider.js';
 import { GENERATION_ERROR_CODES } from '@aipk/core/generation/errors.js';
@@ -137,6 +137,23 @@ export function createRunContext({ config, provider = null, fetchImpl = undefine
     });
   }
 
+  // The light model gets its OWN limiter, because every Gemini rate limit is per model.
+  // Sharing the main model's counters would make the split buy nothing: the point of
+  // routing mechanical calls to a second model is that the second model has its own
+  // daily allowance.
+  const modelLight = config.gemini.modelLight;
+  if (modelLight && !isLimiterConfigured(modelLight)) {
+    configureLimiterFor(modelLight, {
+      // RPM and TPM reuse the main model's numbers. They have not been read off the
+      // rate-limit page for this model (CF-003), and a lite model almost always allows
+      // more — so reusing them can only under-request, never over-run a limit we have
+      // not verified. RPD is the one that matters and has its own setting.
+      rpm: config.gemini.rpm,
+      tpm: config.gemini.tpm,
+      rpd: config.gemini.rpdLight,
+    });
+  }
+
   const guard = createUrlGuard({ allowPrivateHosts: config.retrieval.allowPrivateHosts });
 
   const fetcher = createPageFetcher({
@@ -146,15 +163,33 @@ export function createRunContext({ config, provider = null, fetchImpl = undefine
     maxBytes: config.retrieval.fetchMaxBytes,
   });
 
+  const mainProvider =
+    provider ??
+    createGeminiProvider({
+      apiKey: config.gemini.apiKey,
+      model: config.gemini.model,
+      maxOutputTokens: config.gemini.maxOutputTokens,
+    });
+
   return {
     config,
-    provider:
-      provider ??
-      createGeminiProvider({
-        apiKey: config.gemini.apiKey,
-        model: config.gemini.model,
-        maxOutputTokens: config.gemini.maxOutputTokens,
-      }),
+    provider: mainProvider,
+    /**
+     * The provider for mechanical steps — the hiring-page confirmation and flashcards,
+     * as `.env.example` designates them.
+     *
+     * Null when no split is configured, and every call site falls back to the main
+     * provider, so the single-model path is unchanged. When an injected provider is
+     * supplied (tests, `--fake`) it serves both roles: a fake has no quota to protect.
+     */
+    providerLight:
+      modelLight && !provider
+        ? createGeminiProvider({
+            apiKey: config.gemini.apiKey,
+            model: modelLight,
+            maxOutputTokens: config.gemini.maxOutputTokens,
+          })
+        : provider ?? null,
     fetcher,
     robots: createRobotsChecker({ fetcher }),
     cache: createPageCache(),
@@ -189,6 +224,7 @@ export async function runCase(kase, context, hooks = {}) {
 
   const deps = {
     provider: context.provider,
+    providerLight: context.providerLight,
     fetcher: context.fetcher,
     robots: context.robots,
     cache: context.cache,

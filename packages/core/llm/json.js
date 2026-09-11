@@ -188,7 +188,10 @@ export async function completeStructured({
   onRetry,
   attempts = RETRY_DEFAULTS.attempts,
   sleep,
-  limiter = getLimiter(),
+  // The limiter for THIS provider's model. RPM/TPM/RPD are per-model on Gemini, so a
+  // light model routed a mechanical call must be paced against its own allowance —
+  // sharing one counter would make the two-model split buy nothing.
+  limiter = getLimiter(provider?.model),
 } = {}) {
   if (!provider || typeof provider.complete !== 'function') {
     throw new LlmError(

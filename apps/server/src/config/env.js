@@ -52,6 +52,11 @@ export const OPTIONAL_VARS = {
   // Second, cheaper model for near-mechanical calls. Unset — or set equal to
   // GEMINI_MODEL — means one model for everything.
   GEMINI_MODEL_LIGHT: null,
+  // The light model's OWN daily ceiling. Every Gemini rate limit is per model, so the
+  // split only buys quota if the second model is counted separately. Defaults to the
+  // main model's RPD, which is conservative: a lite model usually allows more, so the
+  // worst case is under-using it rather than over-running a limit we have not read.
+  GEMINI_RPD_LIGHT: null,
   // Local fixture server port. Unused in production, so absence is not a fault.
   FIXTURE_PORT: 8099,
   // Crawl depth is the one crawl knob the template omits; core defaults to 2.
@@ -70,6 +75,7 @@ const INTEGER_VARS = Object.freeze({
   GEMINI_RPM: { min: 1, max: 10_000 },
   GEMINI_TPM: { min: 1_000, max: 100_000_000 },
   GEMINI_RPD: { min: 1, max: 10_000_000 },
+  GEMINI_RPD_LIGHT: { min: 1, max: 10_000_000 },
   LLM_MAX_OUTPUT_TOKENS: { min: 256, max: 1_000_000 },
   MAX_LLM_CALLS_PER_KIT: { min: 1, max: 100 },
   CASE_SOFT_DEADLINE_MS: { min: 1_000, max: 900_000 },
@@ -408,6 +414,8 @@ export function validateEnv(source = {}) {
         rpm: numbers.GEMINI_RPM,
         tpm: numbers.GEMINI_TPM,
         rpd: numbers.GEMINI_RPD,
+        // Only meaningful when modelLight is set. Falls back to the main ceiling.
+        rpdLight: numbers.GEMINI_RPD_LIGHT ?? numbers.GEMINI_RPD,
         maxOutputTokens: numbers.LLM_MAX_OUTPUT_TOKENS,
       },
       budgets: {
