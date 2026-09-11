@@ -345,6 +345,23 @@ export function validateEnv(source = {}) {
         )
       );
     }
+
+    // A URI with no database in its path is legal, and MongoDB quietly uses `test`.
+    // That is how a production deployment ends up writing every user and every kit into
+    // a database nobody meant to use and nobody thinks to back up — and it is invisible,
+    // because everything works. A warning rather than a fatal: the URI is valid, and
+    // refusing to boot over a default would be wrong.
+    const path = uri.split('/').slice(3).join('/').split('?')[0];
+    if (path === '') {
+      warnings.push(
+        problem(
+          'MONGODB_URI',
+          'CONFIG_NO_DATABASE_NAME',
+          'MONGODB_URI names no database, so MongoDB will use "test". Add one before ' +
+            'the query string, e.g. mongodb+srv://user:pass@host/ai_interview_prep_kit?retryWrites=true'
+        )
+      );
+    }
   }
 
   if (!isBlank(source.WEB_ORIGIN)) {

@@ -155,13 +155,41 @@ function applyWrite(kit, set, push, now) {
   kit.updatedAt = now();
 }
 
+/**
+ * Set a dotted path, refusing exactly what MongoDB refuses.
+ *
+ * MongoDB will NOT create a field inside a value that is already null or a scalar — it
+ * fails the whole update with PathNotViable. This store used to create the missing
+ * object happily, which is the dangerous direction for a stand-in to differ in: a write
+ * that passes every test and fails against the real database. Found by running the
+ * store contract against both, where `kit.marker` on a fresh kit (whose `kit` defaults
+ * to null) succeeded here and threw there.
+ *
+ * Matching the stricter behaviour means a route that would fail in production fails in
+ * the test suite instead.
+ */
 function setPath(target, path, value) {
   const keys = path.split('.');
   let cursor = target;
+
   for (let index = 0; index < keys.length - 1; index += 1) {
-    cursor[keys[index]] = cursor[keys[index]] ?? {};
-    cursor = cursor[keys[index]];
+    const key = keys[index];
+    const next = cursor[key];
+
+    if (next === null || (next !== undefined && typeof next !== 'object')) {
+      const error = new Error(
+        `Cannot create field '${keys[index + 1]}' in element {${key}: ${JSON.stringify(next)}}. ` +
+          'MongoDB refuses this, so this store does too — set the parent object in the ' +
+          'same write instead of writing through it.'
+      );
+      error.code = 'PATH_NOT_VIABLE';
+      throw error;
+    }
+
+    if (next === undefined) cursor[key] = {};
+    cursor = cursor[key];
   }
+
   cursor[keys.at(-1)] = value;
 }
 
