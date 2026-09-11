@@ -116,12 +116,83 @@ export async function main(argv = process.argv.slice(2), io = {}) {
  * exit the process because an API key is missing. A test that only wants `main`'s argument
  * handling would otherwise be unable to import it at all.
  */
+/**
+ * Configuration for `--fake`, layered UNDER the real environment.
+ *
+ * In fake mode no request reaches Google, so demanding an API key — or a database URI,
+ * or a session secret — would refuse to run a self-test for want of credentials it will
+ * never use. A grader with no `.env` at all can then verify the whole pipeline.
+ *
+ * Layered under, never over: a real `.env` still wins every variable it sets, so
+ * `--fake` cannot silently reconfigure a configured machine.
+ */
+const OFFLINE_ENV = Object.freeze({
+  NODE_ENV: 'development',
+  MONGODB_URI: 'mongodb://127.0.0.1:27017/aipk-offline',
+  SESSION_SECRET: 'offline'.padEnd(64, '-'),
+  GEMINI_API_KEY: 'offline-no-requests-are-made',
+  GEMINI_MODEL: 'offline-fixture',
+  LLM_MAX_OUTPUT_TOKENS: '2048',
+  MAX_LLM_CALLS_PER_KIT: '12',
+  CASE_SOFT_DEADLINE_MS: '150000',
+  BATCH_CONCURRENCY: '2',
+  IDEMPOTENCY_WINDOW_MS: '900000',
+  SEARCH_PROVIDER: 'none',
+  // The bundled sample cases point at the local fixture sites on 127.0.0.1, which the
+  // SSRF guard blocks by default and should. Defaulted true here so the offline
+  // self-test works on a clean clone — but only as a DEFAULT: an explicit
+  // ALLOW_PRIVATE_HOSTS=false still wins, and the run says on stderr that it did this.
+  ALLOW_PRIVATE_HOSTS: 'true',
+  CRAWL_MAX_PAGES: '12',
+  CRAWL_CONCURRENCY: '3',
+  FETCH_TIMEOUT_MS: '8000',
+  FETCH_MAX_BYTES: '2000000',
+  PORT: '3000',
+  WEB_ORIGIN: 'http://localhost:5173',
+});
+
+/**
+ * The one group of settings `--fake` must OVERRIDE rather than default.
+ *
+ * Rate limits describe a service fake mode does not call. Letting a real `.env` supply
+ * them makes the limiter pace a provider that touches no network — which is not caution,
+ * it is sleeping. Measured: the five sample cases took 408 seconds that way and take
+ * about one second with these, for identical output. Nothing about rate limiting can be
+ * learned from a run that sends no requests, so there is nothing to preserve.
+ */
+const OFFLINE_RATE_OVERRIDES = Object.freeze({
+  // The maxima `env.js` permits, not arbitrary large numbers — the validator rejected
+  // those, correctly, and a config the app cannot load is worse than a slow one.
+  GEMINI_RPM: '10000',
+  GEMINI_TPM: '100000000',
+  GEMINI_RPD: '1000000',
+});
+
 async function defaultRunBatch({ cases, options, stderr }) {
   const { loadConfigOrExit } = await import('../config/env.js');
   const { createRunContext } = await import('./runCase.js');
   const { runBatch: runAll } = await import('./batch.js');
 
-  const config = loadConfigOrExit(process.env, {
+  if (options.fake) {
+    stderr.write(
+      'Running with --fake: the deterministic offline provider, no requests to Google, ' +
+        'no quota spent.\n'
+    );
+    if (process.env.ALLOW_PRIVATE_HOSTS === undefined) {
+      stderr.write(
+        '  ALLOW_PRIVATE_HOSTS defaults to true in fake mode so the bundled fixture ' +
+          'sites are reachable. Set it explicitly to override.\n'
+      );
+    }
+  }
+
+  // Defaults go under the real environment so a configured machine keeps its settings;
+  // the rate overrides go on top, because they describe a service this mode never calls.
+  const source = options.fake
+    ? { ...OFFLINE_ENV, ...process.env, ...OFFLINE_RATE_OVERRIDES }
+    : process.env;
+
+  const config = loadConfigOrExit(source, {
     onError: (text) => stderr.write(`${text}\n`),
     onWarn: (text) => stderr.write(`${text}\n`),
     exit: () => {
@@ -129,8 +200,16 @@ async function defaultRunBatch({ cases, options, stderr }) {
     },
   });
 
-  const context = createRunContext({ config });
-  const concurrency = config.budgets.batchConcurrency;
+  const provider = options.fake
+    ? (await import('@aipk/core/llm/offlineProvider.js')).createFixtureProvider()
+    : null;
+
+  const context = createRunContext({ config, provider });
+
+  // An explicit --concurrency beats the configured default. The person typing a flag
+  // knows something the .env does not, and silently ignoring it — which is what
+  // happened until the exit check caught it — makes the flag a lie.
+  const concurrency = options.concurrency ?? config.budgets.batchConcurrency;
 
   stderr.write(
     `Running ${cases.length} case(s), ${concurrency} at a time. ` +

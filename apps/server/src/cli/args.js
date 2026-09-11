@@ -41,8 +41,10 @@ Required:
   --output <path>   where the results document is written
 
 Options:
-  --concurrency <n> cases in flight at once (default 2)
-  --fake            use the deterministic fake provider; makes no network calls
+  --concurrency <n> cases in flight at once (default: BATCH_CONCURRENCY, or 2)
+  --fake            use the deterministic offline provider. Makes no requests to
+                    Google and spends no quota, and needs no .env at all — so a
+                    clean clone can verify the whole pipeline without an API key.
   -h, --help        show this message
 
 Output:
@@ -65,7 +67,10 @@ const BOOLEAN_FLAGS = new Set(['--fake', '--help', '-h']);
  * @returns {{ ok: true, options: object } | { ok: false, exitCode: number, message: string, showUsage: boolean }}
  */
 export function parseArgs(argv = []) {
-  const options = { input: null, output: null, concurrency: 2, fake: false, help: false };
+  // `concurrency: null` means "not specified", which is NOT the same as 2. With a
+  // default of 2 here the caller cannot tell an explicit --concurrency 2 from silence,
+  // so BATCH_CONCURRENCY in .env could never win and would be dead configuration.
+  const options = { input: null, output: null, concurrency: null, fake: false, help: false };
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];

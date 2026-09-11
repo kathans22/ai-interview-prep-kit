@@ -117,7 +117,7 @@ async function checkWorkspaceLinks() {
  */
 async function checkBatchRun() {
   const { startFixtureServer } = await import('../fixtures/serve.js');
-  const { createFixtureProvider } = await import('../fixtures/fixtureProvider.js');
+  const { createFixtureProvider } = await import('@aipk/core/llm/offlineProvider.js');
   const { validateCases } = await import('../apps/server/src/cli/args.js');
   const { createRunContext } = await import('../apps/server/src/cli/runCase.js');
   const { runBatch } = await import('../apps/server/src/cli/batch.js');
