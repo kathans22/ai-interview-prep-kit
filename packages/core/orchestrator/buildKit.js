@@ -29,10 +29,13 @@ import { STEPS, STATUS, createReporter } from './steps.js';
 import { researchFromJd, researchCompany, generateQuestions } from './research.js';
 import { runCoverageLoop } from './coverageLoop.js';
 import { assembleKit } from './assemble.js';
+import { createTimeGovernor, DEFAULT_SOFT_DEADLINE_MS } from './timeGovernor.js';
+import { generateFlashcards } from '../generation/generateFlashcards.js';
 
 /** Defaults matching Block C, overridable by the adapter's config. */
 export const BUILD_DEFAULTS = Object.freeze({
   maxLlmCallsPerKit: 12,
+  caseSoftDeadlineMs: DEFAULT_SOFT_DEADLINE_MS,
   crawlMaxPages: 12,
   crawlMaxDepth: 2,
   crawlConcurrency: 3,
@@ -73,6 +76,12 @@ export async function buildKit(input, deps = {}, hooks = {}) {
   }
 
   const reporter = createReporter(hooks.onProgress);
+  // The clock starts at entry, not at the first call: time spent setting up, crawling
+  // and waiting on the limiter all counts against the case, because it all counts
+  // against the fifteen minutes the batch command has for five cases.
+  const governor =
+    deps.governor ??
+    createTimeGovernor({ softDeadlineMs: deps.caseSoftDeadlineMs ?? BUILD_DEFAULTS.caseSoftDeadlineMs });
   const budget = deps.budget ?? createBudget(deps.maxLlmCallsPerKit ?? BUILD_DEFAULTS.maxLlmCallsPerKit);
   const ledger = deps.ledger ?? createSourceLedger();
   const cache = deps.cache ?? createPageCache();
@@ -83,6 +92,7 @@ export async function buildKit(input, deps = {}, hooks = {}) {
     budget,
     ledger,
     cache,
+    governor,
   };
 
   /** Everything accumulated so far. Shaped so a resume can be handed the same object. */
@@ -119,7 +129,7 @@ export async function buildKit(input, deps = {}, hooks = {}) {
   }
 
   // --- steps 3-7: the company. Everything here degrades. --------------------
-  await researchCompany({ companyUrl, deps: resolved, reporter, budget, state, governor: deps.governor });
+  await researchCompany({ companyUrl, deps: resolved, reporter, budget, state, governor });
 
   // --- step 8: questions ----------------------------------------------------
   await generateQuestions({ deps: resolved, reporter, budget, state });
@@ -132,13 +142,49 @@ export async function buildKit(input, deps = {}, hooks = {}) {
     reporter,
     budget,
     state,
-    governor: deps.governor,
+    governor,
   });
 
   state.questions = coverage.questions;
   state.coveragePasses = coverage.passes;
   state.uncovered = coverage.uncovered;
   state.notes.push(...coverage.notes);
+
+  // --- step 11: flashcards — OPTIONAL under the governor --------------------
+  if (!governor.mayRun(STEPS.FLASHCARDS)) {
+    governor.recordSkip(STEPS.FLASHCARDS);
+    state.notes.push(
+      `Flashcards were skipped: the ${governor.report().softDeadlineMs}ms case deadline had ` +
+        `passed (${governor.elapsedMs()}ms elapsed). The kit is complete without them.`
+    );
+    reporter.emit(STEPS.FLASHCARDS, STATUS.SKIPPED, { reason: 'TIME_GOVERNOR', elapsedMs: governor.elapsedMs() });
+  } else if (!budget.canSpend(1)) {
+    governor.recordSkip(STEPS.FLASHCARDS, 'BUDGET_EXHAUSTED');
+    state.notes.push('Flashcards were skipped: the call budget was exhausted.');
+    reporter.emit(STEPS.FLASHCARDS, STATUS.SKIPPED, { reason: 'BUDGET_EXHAUSTED' });
+  } else {
+    reporter.emit(STEPS.FLASHCARDS, STATUS.STARTED);
+    try {
+      const result = await generateFlashcards(
+        {
+          requirements: state.requirements,
+          questions: state.questions,
+          existingIds: state.flashcards.map((card) => card.id),
+        },
+        { provider: resolved.provider, spend: () => budget.spend(STEPS.FLASHCARDS) }
+      );
+      state.flashcards = result.flashcards;
+      reporter.emit(STEPS.FLASHCARDS, result.flashcards.length > 0 ? STATUS.DONE : STATUS.DEGRADED, {
+        count: result.flashcards.length,
+        rejected: result.rejected.length,
+      });
+      if (result.skipped) state.notes.push(result.skipped);
+    } catch (error) {
+      // Flashcards are the one piece of content the kit is explicitly complete without.
+      state.notes.push(`Flashcard generation failed (${error.code ?? 'error'}); the kit has none.`);
+      reporter.emit(STEPS.FLASHCARDS, STATUS.FAILED, { code: error.code });
+    }
+  }
 
   // --- step 12: schedule (code, never a prompt) -----------------------------
   reporter.emit(STEPS.SCHEDULE, STATUS.STARTED, { days });
@@ -163,6 +209,7 @@ export async function buildKit(input, deps = {}, hooks = {}) {
     notes: state.notes,
     events: reporter.events(),
     budget: budget.report(),
+    governor: governor.report(),
     state,
   };
 }
