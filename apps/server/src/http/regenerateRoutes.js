@@ -39,6 +39,7 @@ import { createBudget } from '@aipk/core/llm/budget.js';
 import { route, ApiError } from './errors.js';
 import { validateRegenerate, validateRevision } from './validate.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
+import { writeKitChecked } from './writeKit.js';
 import { captureSection, UNDOABLE_SECTIONS } from '../models/undo.js';
 
 /**
@@ -149,7 +150,7 @@ export function mountRegenerateRoutes(app, { rateLimit = (req, res, next) => nex
       // that has already moved on. This is also the request's conflict point: if it
       // succeeds, this request owns the next write.
       const snapshot = captureSection(kitDoc.kit, section);
-      const afterSnapshot = await request.store.kits.writeWithRevision({
+      const afterSnapshot = await writeKitChecked(request, {
         kitId,
         expectedRevision: revision,
         set: { [`previousSections.${section}`]: snapshot },
@@ -192,7 +193,7 @@ export function mountRegenerateRoutes(app, { rateLimit = (req, res, next) => nex
       }
 
       // --- 5. write --------------------------------------------------------
-      const updated = await request.store.kits.writeWithRevision({
+      const updated = await writeKitChecked(request, {
         kitId,
         expectedRevision: afterSnapshot.revision,
         set: { kit: merged },
@@ -244,7 +245,7 @@ export function mountRegenerateRoutes(app, { rateLimit = (req, res, next) => nex
         set[`kit.${field}`] = value;
       }
 
-      const updated = await request.store.kits.writeWithRevision({
+      const updated = await writeKitChecked(request, {
         kitId,
         expectedRevision: revision,
         set,

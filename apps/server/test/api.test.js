@@ -373,6 +373,16 @@ test('EXIT CHECK: a PATCH with a stale revision returns 409, not a silent overwr
   assert.equal(second.body.error.currentRevision, staleRevision + 1);
   assert.equal(second.body.error.expectedRevision, staleRevision);
 
+  // The brief requires the CURRENT KIT in the conflict body, not just the revision:
+  // with a number alone the client must fire a second request before it can recover,
+  // and a client that does not know to do that drops the user's edit.
+  assert.ok(second.body.error.kit, 'the 409 must carry the current kit');
+  assert.equal(
+    second.body.error.kit.questions.find((entry) => entry.id === 'q1').prompt,
+    'THE FIRST EDIT',
+    'and it must be the CURRENT kit, not the stale copy the client already had'
+  );
+
   // The first edit is intact. This is the assertion that matters: a 409 that still
   // wrote would be worse than no check at all, because it would look safe.
   const current = await alice.call(`/api/kits/${kitId}`);

@@ -112,6 +112,10 @@ export function errorBody(error, { exposeInternal = false } = {}) {
   if (error?.code === 'STALE_REVISION') {
     body.error.currentRevision = error.currentRevision;
     body.error.expectedRevision = error.expectedRevision;
+    // The current kit, when the route managed to re-read it. The brief requires it:
+    // with only a revision number the client must fire a second request before it can
+    // recover, and a client that does not know to do that drops the user's edit.
+    if (error.kit !== undefined) body.error.kit = error.kit;
   }
   if (error?.details) body.error.details = error.details;
 

@@ -34,6 +34,7 @@ import { QUESTION_CATEGORIES } from '@aipk/core/contracts/kitSchema.js';
 import { route, ApiError } from './errors.js';
 import { validateRevision } from './validate.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
+import { writeKitChecked } from './writeKit.js';
 
 /** The edits a client may make. A closed set; anything else is a 400. */
 export const EDIT_OPS = Object.freeze([
@@ -219,7 +220,7 @@ export function mountEditRoutes(app) {
       // revision throws StaleRevisionError, which the error handler renders as a 409
       // carrying the current revision so the client can reapply rather than lose the
       // edit.
-      const updated = await request.store.kits.writeWithRevision({
+      const updated = await writeKitChecked(request, {
         kitId: String(kitDoc.id ?? kitDoc._id),
         expectedRevision: revision,
         set: { kit: recomputed },
