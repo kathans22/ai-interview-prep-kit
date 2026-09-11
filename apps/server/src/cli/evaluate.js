@@ -118,7 +118,8 @@ export async function main(argv = process.argv.slice(2), io = {}) {
  */
 async function defaultRunBatch({ cases, options, stderr }) {
   const { loadConfigOrExit } = await import('../config/env.js');
-  const { createRunContext, runCase } = await import('./runCase.js');
+  const { createRunContext } = await import('./runCase.js');
+  const { runBatch: runAll } = await import('./batch.js');
 
   const config = loadConfigOrExit(process.env, {
     onError: (text) => stderr.write(`${text}\n`),
@@ -129,28 +130,30 @@ async function defaultRunBatch({ cases, options, stderr }) {
   });
 
   const context = createRunContext({ config });
-  const startedAt = Date.now();
+  const concurrency = config.budgets.batchConcurrency;
 
   stderr.write(
-    `Running ${cases.length} case(s) sequentially. ` +
+    `Running ${cases.length} case(s), ${concurrency} at a time. ` +
       `Budget ${config.budgets.maxLlmCallsPerKit} calls per kit, ` +
       `${Math.round(config.budgets.caseSoftDeadlineMs / 1000)}s soft deadline each.\n`
   );
 
-  const entries = [];
-  for (const kase of cases) {
-    stderr.write(`\n[${kase.id}] ${kase.days} day(s) · ${kase.company_url || 'no company url'}\n`);
+  const { entries, elapsedMs } = await runAll({
+    cases,
+    context,
+    concurrency,
+    // Interleaved cases share one stream, so every line is prefixed with its case id.
+    // Without that the output of two concurrent builds is unreadable and, worse,
+    // misattributable — a failure looks like it belongs to whichever case printed last.
+    onCaseStart: ({ index, total, case: kase }) =>
+      stderr.write(
+        `\n[${kase.id}] (${index + 1}/${total}) ${kase.days} day(s) · ` +
+          `${kase.company_url || 'no company url'}\n`
+      ),
+    onCaseEnd: (entry) => stderr.write(`${formatCaseSummary(entry)}\n`),
+  });
 
-    // eslint-disable-next-line no-await-in-loop
-    const entry = await runCase(kase, context, {
-      onProgress: (step, status) => stderr.write(`  ${step} ${status}\n`),
-    });
-
-    entries.push(entry);
-    stderr.write(`${formatCaseSummary(entry)}\n`);
-  }
-
-  stderr.write(`\n${formatRunSummary(entries, Date.now() - startedAt)}\n`);
+  stderr.write(`\n${formatRunSummary(entries, elapsedMs)}\n`);
 
   // The envelope write arrives in unit 4. Saying so beats writing a half-shaped file that
   // a grader would read as the real output.
