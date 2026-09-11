@@ -183,14 +183,19 @@ test('EXIT CHECK: two concurrent callers provably share one bucket', async () =>
   assert.equal(report.admitted, 6, 'both callers were counted by the same limiter');
   assert.equal(report.usedToday, 6, 'and against the same daily total');
 
-  // Six requests through a 4/minute bucket cannot finish inside one minute: the first
-  // four are free, the remaining two must each wait a refill period. Two independent
-  // limiters would have let all six through immediately, which is the bug this guards.
+  // Six requests at 4/minute are spaced evenly at 15s: the first goes immediately and
+  // the other five each wait. Two independent limiters would have let all six through
+  // at once, which is the bug this guards.
+  //
+  // The expected shape changed when the default burst became 1. It used to be "four
+  // free, then two waits" — a bucket that starts full — and that burst is precisely
+  // what made a correctly-configured rpm=5 return 429 from Google's rolling window
+  // (BUG-028). Even spacing is the safer behaviour and this now asserts it.
   assert.ok(
-    clock.elapsed() >= 30_000,
-    `six calls at 4 rpm must span at least half a minute, took ${clock.elapsed()}ms`
+    clock.elapsed() >= 60_000,
+    `six calls at 4 rpm must span at least a minute, took ${clock.elapsed()}ms`
   );
-  assert.equal(admissions.filter((entry) => entry.waitedMs > 0).length, 2);
+  assert.equal(admissions.filter((entry) => entry.waitedMs > 0).length, 5);
 });
 
 test('the singleton is one object, and refuses to be reconfigured', () => {
@@ -215,7 +220,9 @@ test('the singleton is one object, and refuses to be reconfigured', () => {
 
 test('RPD is refused immediately rather than waited out', async () => {
   const clock = virtualClock();
-  const limiter = createLimiter({ rpm: 100, tpm: 1_000_000, rpd: 2, now: clock.now, sleep: clock.sleep });
+  // burst 2 so RPM pacing does not add waiting of its own — this test is about RPD,
+  // and a wait caused by the wrong constraint would pass for the wrong reason.
+  const limiter = createLimiter({ rpm: 100, tpm: 1_000_000, rpd: 2, burst: 2, now: clock.now, sleep: clock.sleep });
 
   await limiter.acquire({});
   await limiter.acquire({});
@@ -241,7 +248,9 @@ test('one refusal does not deadlock later callers', async () => {
 
 test('the token bucket throttles on estimated tokens as well as requests', async () => {
   const clock = virtualClock();
-  const limiter = createLimiter({ rpm: 1000, tpm: 1000, rpd: 100, now: clock.now, sleep: clock.sleep });
+  // A generous burst so REQUEST pacing contributes no wait: this test is about the
+  // TOKEN bucket, and a wait from the wrong constraint would pass for the wrong reason.
+  const limiter = createLimiter({ rpm: 1000, tpm: 1000, rpd: 100, burst: 1000, now: clock.now, sleep: clock.sleep });
 
   const waits = [];
   for (let index = 0; index < 4; index += 1) {
@@ -887,5 +896,39 @@ test('the real Gemini daily-quota 429 classifies as RPD and survives into the no
   const limit = classifyRateLimit(message);
   assert.equal(limit, RATE_LIMIT_KINDS.RPD);
   assert.match(describeStepFailure({ code: 'LLM_RATE_LIMITED', details: { limit } }), /limit=RPD/);
+});
+
+test('BUG-028: the first minute never exceeds rpm, even at process start', async () => {
+  // The defect this pins: a bucket sized to rpm STARTS FULL, so rpm=5 released five
+  // requests instantly and then one every twelve seconds — ten inside the first rolling
+  // sixty seconds, against a published limit of five. Google returned 429 even though
+  // the configured number exactly matched its own rate-limit page, and the number was
+  // then wrongly blamed and lowered.
+  const clock = virtualClock();
+  const limiter = createLimiter({ rpm: 5, tpm: 10_000_000, rpd: 1000, now: clock.now, sleep: clock.sleep });
+
+  const sentAt = [];
+  for (let index = 0; index < 10; index += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    await limiter.acquire({});
+    sentAt.push(clock.elapsed());
+  }
+
+  // Every rolling 60-second window, not just the first.
+  for (const start of sentAt) {
+    const inWindow = sentAt.filter((at) => at >= start && at < start + 60_000).length;
+    assert.ok(inWindow <= 5, `window from ${start}ms held ${inWindow} requests, limit 5`);
+  }
+
+  // Evenly spaced at 60/rpm, which is what a rolling window actually permits.
+  assert.deepEqual(sentAt.slice(0, 4), [0, 12_000, 24_000, 36_000]);
+});
+
+test('a burst can still be asked for explicitly, when an API allows one', () => {
+  // The default is safe, not mandatory: an API with a genuine burst allowance should be
+  // able to use it rather than being paced to the floor.
+  const clock = virtualClock();
+  const limiter = createLimiter({ rpm: 10, tpm: 1_000_000, rpd: 100, burst: 3, now: clock.now, sleep: clock.sleep });
+  assert.ok(limiter);
 });
 

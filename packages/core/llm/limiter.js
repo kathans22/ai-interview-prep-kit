@@ -122,10 +122,30 @@ export function createLimiter({
   rpm = 5,
   tpm = 100_000,
   rpd = 200,
+  /**
+   * How many requests may go out back-to-back before pacing begins.
+   *
+   * ONE BY DEFAULT, AND THAT IS THE FIX FOR A REAL 429. A bucket sized to `rpm` starts
+   * FULL, so at rpm=5 it releases five requests instantly and then one every twelve
+   * seconds — putting TEN requests into the first rolling sixty seconds against a limit
+   * of five. Google measures a rolling window, so it returned 429 even though the
+   * configured number matched the published limit exactly. That 429 was then blamed on
+   * the number rather than on the burst, and the number was lowered to 2 (CF-053).
+   *
+   * With a burst of 1 the requests are spaced evenly at 60/rpm seconds and the rolling
+   * window is never exceeded. The cost is that a run cannot open with a flurry; on a
+   * ceiling of twenty requests a day, where every 429 costs a retry and every retry
+   * costs one of those twenty, that is a trade worth making by default.
+   */
+  burst = 1,
   now = () => Date.now(),
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
-  const requests = new TokenBucket({ capacity: rpm, refillPerMs: rpm / MINUTE_MS, now });
+  const capacity = Math.max(1, Math.min(burst, rpm));
+  const requests = new TokenBucket({ capacity, refillPerMs: rpm / MINUTE_MS, now });
+  // TPM keeps a full bucket: token limits are measured per minute in aggregate, and one
+  // large request is a single request — spacing tokens the way requests are spaced would
+  // stall a legitimate prompt that fits comfortably inside the allowance.
   const tokens = new TokenBucket({ capacity: tpm, refillPerMs: tpm / MINUTE_MS, now });
 
   let dayCount = 0;
