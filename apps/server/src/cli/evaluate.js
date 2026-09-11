@@ -91,15 +91,122 @@ export async function main(argv = process.argv.slice(2), io = {}) {
     return EXIT.BAD_ARGUMENTS;
   }
 
-  if (!runBatch) {
-    // The runner arrives in the next unit. Until then, say so rather than pretending.
-    stderr.write(
-      `Parsed ${validated.cases.length} case(s) from ${input}, but the batch runner is not wired yet.\n`
-    );
+  const run = runBatch ?? defaultRunBatch;
+
+  try {
+    return await run({ cases: validated.cases, options: parsed.options, stderr });
+  } catch (error) {
+    // A fault in the harness rather than in a case. Cases handle their own failures and
+    // never throw, so reaching here means configuration, disk or a programming error —
+    // all of which must exit non-zero rather than leaving a clean-looking run behind.
+    if (error?.name !== 'ConfigurationRefused') {
+      stderr.write(`The run could not complete: ${error?.message ?? error}\n`);
+    }
     return EXIT.RUN_FAILED;
   }
+}
 
-  return runBatch({ cases: validated.cases, options: parsed.options, stderr });
+/**
+ * The real batch runner.
+ *
+ * Separated from `main` so the contract test can replace it wholesale with a stub, and so
+ * `main` stays about argv and files rather than about orchestration.
+ *
+ * Config is loaded HERE rather than at module top level: importing this file must not
+ * exit the process because an API key is missing. A test that only wants `main`'s argument
+ * handling would otherwise be unable to import it at all.
+ */
+async function defaultRunBatch({ cases, options, stderr }) {
+  const { loadConfigOrExit } = await import('../config/env.js');
+  const { createRunContext, runCase } = await import('./runCase.js');
+
+  const config = loadConfigOrExit(process.env, {
+    onError: (text) => stderr.write(`${text}\n`),
+    onWarn: (text) => stderr.write(`${text}\n`),
+    exit: () => {
+      throw new ConfigurationRefused();
+    },
+  });
+
+  const context = createRunContext({ config });
+  const startedAt = Date.now();
+
+  stderr.write(
+    `Running ${cases.length} case(s) sequentially. ` +
+      `Budget ${config.budgets.maxLlmCallsPerKit} calls per kit, ` +
+      `${Math.round(config.budgets.caseSoftDeadlineMs / 1000)}s soft deadline each.\n`
+  );
+
+  const entries = [];
+  for (const kase of cases) {
+    stderr.write(`\n[${kase.id}] ${kase.days} day(s) · ${kase.company_url || 'no company url'}\n`);
+
+    // eslint-disable-next-line no-await-in-loop
+    const entry = await runCase(kase, context, {
+      onProgress: (step, status) => stderr.write(`  ${step} ${status}\n`),
+    });
+
+    entries.push(entry);
+    stderr.write(`${formatCaseSummary(entry)}\n`);
+  }
+
+  stderr.write(`\n${formatRunSummary(entries, Date.now() - startedAt)}\n`);
+
+  // The envelope write arrives in unit 4. Saying so beats writing a half-shaped file that
+  // a grader would read as the real output.
+  stderr.write(`\nNot yet written to ${options.output}: the envelope writer is the next unit.\n`);
+
+  return entries.some((entry) => entry.status === 'failed') ? EXIT.RUN_FAILED : EXIT.OK;
+}
+
+/** Thrown when config validation failed, so a bad .env does not call process.exit mid-run. */
+class ConfigurationRefused extends Error {
+  constructor() {
+    super('Configuration is invalid; see the problems above.');
+    this.name = 'ConfigurationRefused';
+  }
+}
+
+/** One line per case, on stderr, so stdout stays clean. */
+export function formatCaseSummary(entry) {
+  const seconds = (entry.meta.elapsedMs / 1000).toFixed(1);
+
+  if (entry.status === 'failed') {
+    return `  ✗ ${entry.id} failed after ${seconds}s — ${entry.error.code}: ${entry.error.message}`;
+  }
+
+  const { meta } = entry;
+  const parts = [
+    `${meta.requirements} requirements`,
+    `${meta.questions} questions`,
+    `${meta.days} day schedule`,
+    `${meta.pagesUsed} page(s) used`,
+    `${meta.budget.spent}/${meta.budget.maxCalls} calls`,
+    `${meta.passes} coverage pass(es)`,
+  ];
+
+  // An uncovered requirement is the kind of gap that is easy to ship and hard to notice,
+  // so it is called out rather than left to be inferred from a count.
+  if (meta.uncovered > 0) parts.push(`⚠ ${meta.uncovered} uncovered`);
+
+  // Notes are where degradation becomes visible. Printing the count and not the notes
+  // would make a kit built from a dead company site look identical to a complete one.
+  const notes = meta.notes.length > 0 ? `\n      notes: ${meta.notes.join('; ')}` : '';
+
+  return `  ✓ ${entry.id} ok in ${seconds}s — ${parts.join(', ')}${notes}`;
+}
+
+/** Totals, including the timing the fifteen-minute window is measured against. */
+export function formatRunSummary(entries, elapsedMs) {
+  const ok = entries.filter((entry) => entry.status === 'ok').length;
+  const failed = entries.length - ok;
+  const seconds = (elapsedMs / 1000).toFixed(1);
+  const calls = entries.reduce((total, entry) => total + (entry.meta?.budget?.spent ?? 0), 0);
+
+  return (
+    `${entries.length} case(s): ${ok} ok, ${failed} failed · ${seconds}s total · ` +
+    `${calls} model call(s) spent`
+  );
 }
 
 /**
