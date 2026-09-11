@@ -31,6 +31,12 @@ import { runCoverageLoop } from './coverageLoop.js';
 import { assembleKit } from './assemble.js';
 import { createTimeGovernor, DEFAULT_SOFT_DEADLINE_MS } from './timeGovernor.js';
 import { generateFlashcards } from '../generation/generateFlashcards.js';
+import {
+  createCheckpointer,
+  toCheckpoint,
+  fromCheckpoint,
+} from './checkpoints.js';
+import { restorePageCache } from '../retrieval/pageCache.js';
 
 /** Defaults matching Block C, overridable by the adapter's config. */
 export const BUILD_DEFAULTS = Object.freeze({
@@ -66,7 +72,7 @@ export class BuildFailedError extends Error {
  * @returns {Promise<{ kit: object, notes: string[], events: object[], budget: object }>}
  */
 export async function buildKit(input, deps = {}, hooks = {}) {
-  const { jd, company_url: companyUrl, days, kitId = null } = input ?? {};
+  const { jd, company_url: companyUrl, days, kitId = null, resumeFrom = null } = input ?? {};
 
   if (typeof jd !== 'string' || jd.trim() === '') {
     throw new BuildFailedError('A job description is required to build a kit.', { code: 'BUILD_NO_JD' });
@@ -111,6 +117,52 @@ export async function buildKit(input, deps = {}, hooks = {}) {
     coveragePasses: 0,
   };
 
+  // --- resume ---------------------------------------------------------------
+  // Every research step is written as "if this is not already in state, do it", so a
+  // resume is an overlay rather than a second code path. There is no separate resume
+  // sequence that could drift from the normal one.
+  const checkpointer = createCheckpointer(deps.checkpointStore, {
+    onError: (error) => state.notes.push(`Checkpoint save failed: ${error?.message ?? error}`),
+  });
+
+  if (resumeFrom) {
+    const record = typeof resumeFrom === 'object' ? resumeFrom : await checkpointer.load(resumeFrom);
+    const restored = fromCheckpoint(record, { jd, company_url: companyUrl, days });
+
+    if (restored.ok) {
+      Object.assign(state, restored.state);
+      state.notes = Array.isArray(restored.state.notes) ? [...restored.state.notes] : [];
+
+      // Merge the saved pages INTO the live cache rather than swapping in a new one:
+      // `cache` is already shared with every dependency, so replacing the binding here
+      // would leave the fetcher using an empty cache and re-fetching the whole site —
+      // which is precisely the cost a resume exists to avoid.
+      if (record.pageCache) {
+        const saved = restorePageCache(record.pageCache);
+        for (const url of saved.keys()) {
+          const entry = saved.get(url);
+          if (entry !== undefined) cache.set(url, entry);
+        }
+      }
+
+      for (const step of restored.completed) {
+        reporter.emit(step, STATUS.SKIPPED, { reason: 'RESUMED_FROM_CHECKPOINT' });
+      }
+      state.notes.push(
+        `Resumed from a checkpoint taken at ${record.at}; ${restored.completed.length} step(s) were already complete.`
+      );
+    } else {
+      // A mismatched or unreadable checkpoint means a full rebuild, which is what the
+      // caller would have got without one. It is recorded, not raised.
+      state.notes.push(`Checkpoint not used (${restored.reason}); rebuilding from scratch.`);
+      reporter.emit(STEPS.REQUIREMENTS, STATUS.DEGRADED, { reason: restored.reason });
+    }
+  }
+
+  /** Save after each expensive step. Failures are noted, never fatal. */
+  const checkpoint = () =>
+    checkpointer.save(toCheckpoint({ kitId, input: { jd, company_url: companyUrl, days }, state, cache }));
+
   // --- steps 1-2: the floor. Fatal only here. -------------------------------
   try {
     await researchFromJd({ jd, deps: resolved, reporter, budget, state });
@@ -128,11 +180,15 @@ export async function buildKit(input, deps = {}, hooks = {}) {
     );
   }
 
+  await checkpoint();
+
   // --- steps 3-7: the company. Everything here degrades. --------------------
   await researchCompany({ companyUrl, deps: resolved, reporter, budget, state, governor });
+  await checkpoint();
 
   // --- step 8: questions ----------------------------------------------------
   await generateQuestions({ deps: resolved, reporter, budget, state });
+  await checkpoint();
 
   // --- steps 9-10: coverage, in code, then fill exactly what is missing -----
   const coverage = await runCoverageLoop({
@@ -149,6 +205,7 @@ export async function buildKit(input, deps = {}, hooks = {}) {
   state.coveragePasses = coverage.passes;
   state.uncovered = coverage.uncovered;
   state.notes.push(...coverage.notes);
+  await checkpoint();
 
   // --- step 11: flashcards — OPTIONAL under the governor --------------------
   if (!governor.mayRun(STEPS.FLASHCARDS)) {
