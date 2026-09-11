@@ -23,7 +23,7 @@
 import { route, ApiError } from './errors.js';
 import { validateKitInput } from './validate.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
-import { jdHash, duplicateMessage } from '../models/idempotency.js';
+import { duplicateMessage, duplicateQuery, describeDuplicate } from '../models/idempotency.js';
 
 /** A client cannot ask for more than this many kits in one listing. */
 const MAX_LIST = 100;
@@ -53,25 +53,23 @@ export function mountKitRoutes(app, { startJob = null, rateLimit = (req, res, ne
       const userId = request.session.userId;
 
       const windowMs = request.config.budgets.idempotencyWindowMs;
-      const hash = jdHash(input);
 
-      // Asked of the STORE, not of a Mongoose model directly: the route must work
+      // The POLICY — how the hash is built, how far back to look, which statuses count —
+      // comes from `idempotency.js`, which documents all three. This route used to
+      // restate them inline, so the module held an authoritative copy that nothing
+      // called and changing the rule where it was written changed nothing at runtime.
+      const query = duplicateQuery(input, { windowMs });
+
+      // The QUERY goes to the STORE, not to a Mongoose model: the route must work
       // against either backing store, and a route that reaches for Mongoose query
       // syntax is a route the in-memory store can never satisfy.
-      const existing = await request.store.kits.findDuplicate({
-        userId,
-        jdHash: hash,
-        since: new Date(Date.now() - windowMs),
-        // A failed kit is never reused — the failure may have been transient, and
-        // returning it would make a retry impossible.
-        statuses: ['queued', 'running', 'ready'],
-      });
+      const existing = await request.store.kits.findDuplicate({ userId, ...query });
 
       const duplicate = {
         duplicate: Boolean(existing),
         kit: existing,
-        hash,
-        reason: existing ? (existing.status === 'ready' ? 'DUPLICATE_READY' : 'DUPLICATE_IN_FLIGHT') : 'NO_RECENT_MATCH',
+        hash: query.jdHash,
+        reason: describeDuplicate(existing),
       };
 
       if (duplicate.duplicate) {

@@ -109,6 +109,51 @@ export function jdHash({ jd, company_url: companyUrl, days } = {}) {
  * @param {() => Date} [options.now]
  * @returns {Promise<{ duplicate: boolean, kit: object|null, hash: string, reason: string }>}
  */
+/**
+ * Which statuses count as "already have one".
+ *
+ * A `failed` kit is deliberately absent: the failure may have been transient — a 503, an
+ * exhausted budget, a site that was down — and returning yesterday's failure instead of
+ * trying again would make a retry impossible.
+ */
+export const DUPLICATE_STATUSES = Object.freeze(['queued', 'running', 'ready']);
+
+/**
+ * The lookup this policy implies, as plain values any store can execute.
+ *
+ * POLICY LIVES HERE; THE QUERY LIVES IN THE STORE. The three rules — how the hash is
+ * computed, how far back to look, and which statuses count — are the decisions, and they
+ * belong in one module. Running a `findOne` against Mongo or a filter over a Map is
+ * mechanism, and the two backing stores do it differently.
+ *
+ * This split exists because the rules were duplicated: `kitRoutes` restated the status
+ * list and the window inline while this module held the authoritative copy that nothing
+ * called. Changing the rule where it was documented changed nothing at runtime, which is
+ * worse than dead code — it is misleading code.
+ */
+export function duplicateQuery(input, { windowMs = DEFAULT_IDEMPOTENCY_WINDOW_MS, now = () => new Date() } = {}) {
+  return {
+    jdHash: jdHash(input),
+    since: new Date(now().getTime() - windowMs),
+    statuses: DUPLICATE_STATUSES,
+  };
+}
+
+/**
+ * Name the outcome.
+ *
+ * The two cases a caller may want to distinguish: a finished kit it can return
+ * immediately, and one still being built that it should point the client at.
+ */
+export function describeDuplicate(kit) {
+  if (!kit) return 'NO_RECENT_MATCH';
+  return kit.status === 'ready' ? 'DUPLICATE_READY' : 'DUPLICATE_IN_FLIGHT';
+}
+
+/**
+ * The Mongoose-backed lookup, expressed in terms of the policy above so there is exactly
+ * one definition of each rule.
+ */
 export async function findDuplicate({
   model,
   userId,
@@ -116,29 +161,22 @@ export async function findDuplicate({
   windowMs = DEFAULT_IDEMPOTENCY_WINDOW_MS,
   now = () => new Date(),
 }) {
-  const hash = jdHash(input);
-  const since = new Date(now().getTime() - windowMs);
+  const { jdHash: hash, since, statuses } = duplicateQuery(input, { windowMs, now });
 
   const existing = await model
     .findOne({
       userId,
       'input.jdHash': hash,
-      status: { $in: ['queued', 'running', 'ready'] },
+      status: { $in: statuses },
       createdAt: { $gte: since },
     })
     .sort({ createdAt: -1 });
 
-  if (!existing) {
-    return { duplicate: false, kit: null, hash, reason: 'NO_RECENT_MATCH' };
-  }
-
   return {
-    duplicate: true,
-    kit: existing,
+    duplicate: Boolean(existing),
+    kit: existing ?? null,
     hash,
-    // The two cases a caller may want to distinguish: a finished kit it can return
-    // immediately, and one still being built that it should point the client at.
-    reason: existing.status === 'ready' ? 'DUPLICATE_READY' : 'DUPLICATE_IN_FLIGHT',
+    reason: describeDuplicate(existing),
   };
 }
 

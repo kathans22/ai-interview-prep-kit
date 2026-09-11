@@ -46,6 +46,28 @@ const progressSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/**
+ * One practice rating.
+ *
+ * Beside the kit, never inside it: a regeneration replaces questions, and a merge has no
+ * business deleting a record of what a person actually did. Append-only, because "a 2,
+ * then later a 4" is the interesting shape and overwriting destroys it.
+ *
+ * This field's ABSENCE was a real defect. `practiceRoutes` has pushed to `practice`
+ * since Stage 9, and Mongoose is `strict: true` by default — a `$push` to an undeclared
+ * path is discarded with no error. Against MongoDB every rating would have returned 201
+ * and saved nothing. Invisible until now only because nothing had ever connected.
+ */
+const practiceSchema = new mongoose.Schema(
+  {
+    questionId: { type: String, required: true },
+    confidence: { type: Number, required: true, min: 1, max: 5 },
+    note: { type: String, default: '' },
+    at: { type: Date, default: () => new Date() },
+  },
+  { _id: false }
+);
+
 const kitSchema = new mongoose.Schema(
   {
     userId: {
@@ -104,6 +126,9 @@ const kitSchema = new mongoose.Schema(
 
     /** Serialised page cache, so a resume re-fetches nothing. */
     pageCache: { type: mongoose.Schema.Types.Mixed, default: null },
+
+    /** Practice ratings, append-only. See `practiceSchema`. */
+    practice: { type: [practiceSchema], default: [] },
 
     /** Set only when status is `failed`. Carries the code the caller can act on. */
     error: {
