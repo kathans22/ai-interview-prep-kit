@@ -5,10 +5,14 @@
   "type": "module",
   "description": "Express API and the batch CLI. Both are thin adapters over @aipk/core.",
   "main": "src/index.js",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "dev": "node --watch src/index.js"
   },
   "dependencies": {
-    "@aipk/core": "*"
+    "@aipk/core": "*",
+    "mongoose": "^9.10.0"
   }
 }
