@@ -32,6 +32,7 @@
  */
 
 import { createEmptyKit } from '../contracts/emptyKit.js';
+import { stampKit } from '../contracts/provenance.js';
 
 /**
  * Build the kit.
@@ -95,6 +96,11 @@ export function assembleKit({ input, state, schedule, ledger, researchedAt }) {
     }));
   }
   if (state.thinJd) kit.thin_jd = true;
+
+  // Every item gets provenance before the kit leaves, so there is never a kit whose
+  // items have no `origin`. A merge arriving at an unstamped item cannot then mistake a
+  // person's work for the model's, and `isReplaceable` never has to guess.
+  stampKit(kit, { updatedAt: researchedAt });
 
   return kit;
 }
