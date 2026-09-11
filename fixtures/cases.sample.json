@@ -1,32 +1,32 @@
 [
   {
-    "id": "case-01",
-    "jd": "Senior Frontend Engineer — Acme Logistics (Remote, UK)\n\nWhat you will do:\n• 5+ years' experience with React and TypeScript\n• Comfortable mentoring junior engineers through code review\n• Own the operator console used by dispatchers every day\n• Familiarity with warehouse logistics or fleet routing is a plus\n\nWe are remote-first across the UK and write more than we talk.",
+    "id": "case-01-normal",
+    "jd": "Senior Frontend Engineer — Acme Logistics (Remote, UK)\n\nWhat you will do:\n- 5+ years' experience with React and TypeScript\n- Comfortable mentoring junior engineers through code review\n- Own the operator console used by dispatchers every day\n- Solid grasp of accessibility and keyboard-first interfaces\n- Familiarity with warehouse logistics or fleet routing is a plus\n\nWe are remote-first across the UK and write more than we talk. Our handbook is public.",
     "company_url": "http://localhost:8099/acme/",
     "days": 5
   },
   {
-    "id": "case-02",
-    "jd": "Data Engineer — Northwind Analytics (Bristol, hybrid)\n\nRequirements:\n- 3+ years building batch pipelines in Python\n- SQL against messy, regulated healthcare data\n- Experience with dbt or a comparable transformation layer\n- Nice to have: NHS or pharmacy domain exposure",
-    "company_url": "http://localhost:8099/nohire/",
+    "id": "case-02-thin-jd",
+    "jd": "Backend Engineer — Halstead Freight\n\nWe need someone to own our booking API. Node, Postgres, some queue work.",
+    "company_url": "http://localhost:8099/acme/",
     "days": 3
   },
   {
-    "id": "case-03",
-    "jd": "Backend Engineer — Halstead Freight\n\nWe need someone to own our booking API. Node, Postgres, some queue work.",
-    "company_url": "http://localhost:8099/broken/",
-    "days": 7
+    "id": "case-03-no-hiring-page",
+    "jd": "Data Engineer — Northwind Analytics (Bristol, hybrid)\n\nRequirements:\n- 3+ years building batch pipelines in Python\n- SQL against messy, regulated healthcare data\n- Experience with dbt or a comparable transformation layer\n- Comfortable owning data quality checks end to end\n- Nice to have: NHS or pharmacy domain exposure",
+    "company_url": "http://localhost:8099/nohire/",
+    "days": 4
   },
   {
-    "id": "case-04",
-    "jd": "Robotics Software Engineer — Vector Robotics (Eindhoven)\n\n- Real-time control loops in C++ or Rust\n- Motion planning for picking cells\n- Comfortable owning safety-critical code review\n- Python for tooling",
-    "company_url": "http://localhost:8099/hostile/",
-    "days": 5
-  },
-  {
-    "id": "case-05",
-    "jd": "Platform Engineer — company website unreachable\n\nKubernetes, Terraform, and an on-call rotation. Two lines is all the JD we have.",
+    "id": "case-04-unreachable-url",
+    "jd": "Platform Engineer — Tessellate (Manchester)\n\nRequirements:\n- Kubernetes in production, not just in a tutorial\n- Terraform for everything, reviewed like application code\n- Comfortable carrying a pager on a shared on-call rotation\n- Nice to have: experience migrating off a managed platform",
     "company_url": "http://localhost:8099/does-not-exist/",
+    "days": 6
+  },
+  {
+    "id": "case-05-one-day",
+    "jd": "Robotics Software Engineer — Vector Robotics (Eindhoven)\n\nRequirements:\n- Real-time control loops in C++ or Rust\n- Motion planning for picking cells\n- Comfortable owning safety-critical code review\n- Python for tooling and test rigs",
+    "company_url": "http://localhost:8099/hostile/",
     "days": 1
   }
 ]
