@@ -30,6 +30,8 @@ import {
   configureLimiter,
   getLimiter,
   resetLimiterForTests,
+  isLimiterConfigured,
+  estimateTokens,
 } from '../llm/limiter.js';
 import { withRetry, isRetryable, backoffDelay } from '../llm/retry.js';
 import { parseResponse, parseJsonText, completeStructured, buildRepairInstruction } from '../llm/json.js';
@@ -380,6 +382,162 @@ test('valid JSON parses without a repair call', async () => {
   assert.deepEqual(data, { summary: 'ok' });
   assert.equal(provider.callCount(), 1);
   assert.equal(spent, 1);
+});
+
+// ===========================================================================
+// The limiter is actually consulted.
+//
+// These exist because the module was complete and tested for five stages while being
+// called by nothing — the same fault as BUG-008. A test that the limiter works is not a
+// test that anything uses it, so these assert the wiring, not the buckets.
+// ===========================================================================
+
+/** Records every admission so the wiring is observable. */
+function spyLimiter({ failOn = null } = {}) {
+  const admissions = [];
+  return {
+    admissions,
+    async acquire(options) {
+      admissions.push(options);
+      if (failOn && admissions.length >= failOn) {
+        throw new LlmError(LLM_ERROR_CODES.RATE_LIMITED, 'Daily request ceiling reached (20 requests).', {
+          limit: RATE_LIMIT_KINDS.RPD,
+          retryable: false,
+        });
+      }
+      return { waitedMs: 0, remainingToday: 9 };
+    },
+    schedule: (task) => task(),
+    report: () => ({ configured: true, admitted: admissions.length }),
+  };
+}
+
+test('completeStructured admits every call through the limiter', async () => {
+  const provider = createFakeProvider({ responses: { brief: { summary: 'ok' } } });
+  const limiter = spyLimiter();
+
+  await completeStructured({
+    provider,
+    request: { systemInstruction: 'i', contents: 'c', responseSchema: {} },
+    step: 'brief',
+    limiter,
+  });
+
+  assert.equal(limiter.admissions.length, 1, 'the call was paced, not sent straight out');
+  assert.equal(limiter.admissions[0].label, 'brief', 'the step is labelled so a wait is attributable');
+  assert.ok(limiter.admissions[0].estimatedTokens > 0, 'TPM needs a token estimate to pace on');
+});
+
+test('a transport retry spends a SECOND admission, not one for the pair', async () => {
+  // RPM and RPD count requests that reach the API, and a retry is another such request.
+  // Admitting once around the retry would let three attempts ride on one slot — which is
+  // how a 20-a-day ceiling vanishes while the pacing numbers look correct.
+  const provider = createFakeProvider({
+    responses: { brief: { summary: 'ok' } },
+    failures: { brief: { unavailableTimes: 1 } },
+  });
+  const limiter = spyLimiter();
+
+  await completeStructured({
+    provider,
+    request: { systemInstruction: 'i', contents: 'c', responseSchema: {} },
+    step: 'brief',
+    limiter,
+    sleep: async () => {},
+  });
+
+  assert.equal(provider.callCount(), 2, 'the 503 was retried');
+  assert.equal(limiter.admissions.length, 2, 'each attempt was admitted on its own');
+});
+
+test('a repair is admitted too, because it is a second real request', async () => {
+  const provider = createFakeProvider({
+    responses: { brief: { summary: 'second time lucky' } },
+    failures: { brief: { invalidJsonTimes: 1 } },
+  });
+  const limiter = spyLimiter();
+
+  await completeStructured({
+    provider,
+    request: { systemInstruction: 'i', contents: 'c', responseSchema: {} },
+    step: 'brief',
+    limiter,
+  });
+
+  assert.equal(limiter.admissions.length, 2);
+});
+
+test('daily exhaustion is refused BEFORE the request is sent', async () => {
+  const provider = createFakeProvider({ responses: { brief: { summary: 'ok' } } });
+  const limiter = spyLimiter({ failOn: 1 });
+
+  await assert.rejects(
+    completeStructured({
+      provider,
+      request: { systemInstruction: 'i', contents: 'c', responseSchema: {} },
+      step: 'brief',
+      limiter,
+      sleep: async () => {},
+    }),
+    (error) => error.code === LLM_ERROR_CODES.RATE_LIMITED
+  );
+
+  // The point of pre-emptive admission: a spent daily ceiling costs zero requests to
+  // discover, instead of being learned from a 429 that has already used an attempt.
+  assert.equal(provider.callCount(), 0, 'no request was sent against an exhausted ceiling');
+});
+
+test('an RPD refusal is not retried into', async () => {
+  const provider = createFakeProvider({ responses: { brief: { summary: 'ok' } } });
+  const limiter = spyLimiter({ failOn: 1 });
+
+  await assert.rejects(
+    completeStructured({
+      provider,
+      request: { systemInstruction: 'i', contents: 'c', responseSchema: {} },
+      step: 'brief',
+      limiter,
+      sleep: async () => {},
+    })
+  );
+
+  // RPD does not clear until midnight Pacific, so attempts 2 and 3 could only fail the
+  // same way. One admission attempt, then the error propagates.
+  assert.equal(limiter.admissions.length, 1);
+});
+
+test('estimateTokens counts the prompt and the output allowance', () => {
+  const estimate = estimateTokens({
+    systemInstruction: 'a'.repeat(400),
+    contents: 'b'.repeat(400),
+    maxOutputTokens: 500,
+  });
+
+  // 800 characters plus a newline at ~4 chars/token, plus the reply the model is allowed
+  // to produce — tokens the request spends whether or not the caller counts them as input.
+  assert.ok(estimate > 500 && estimate < 800, `expected roughly 700, got ${estimate}`);
+  assert.equal(estimateTokens({}), 0, 'an empty request estimates nothing rather than throwing');
+});
+
+test('an unconfigured singleton admits everything and says so', async () => {
+  resetLimiterForTests();
+
+  assert.equal(isLimiterConfigured(), false);
+
+  const limiter = getLimiter();
+  const result = await limiter.acquire({ estimatedTokens: 10_000_000 });
+
+  // Pacing at this module's own defaults would be a guess dressed as a guarantee — and
+  // its rpd default of 200 was ten times the real ceiling. The real numbers arrive from
+  // env at boot (CF-024).
+  assert.equal(result.waitedMs, 0);
+  assert.equal(limiter.report().configured, false, 'a run that paced nothing cannot claim it did');
+
+  // And reading the limiter before boot must not consume the one configuration call.
+  const configured = configureLimiter({ rpm: 5, tpm: 100, rpd: 20 });
+  assert.equal(isLimiterConfigured(), true);
+  assert.equal(getLimiter(), configured);
+  resetLimiterForTests();
 });
 
 test('unparseable output gets exactly one repair, and the repair spends budget', async () => {

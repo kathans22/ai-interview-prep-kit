@@ -30,6 +30,7 @@
 
 import { LlmError, LLM_ERROR_CODES, assertUsableResponse } from './provider.js';
 import { withRetry, RETRY_DEFAULTS } from './retry.js';
+import { getLimiter, estimateTokens } from './limiter.js';
 
 /** How much of a bad response to carry in an error before it stops being useful. */
 const ERROR_TEXT_LIMIT = 500;
@@ -187,6 +188,7 @@ export async function completeStructured({
   onRetry,
   attempts = RETRY_DEFAULTS.attempts,
   sleep,
+  limiter = getLimiter(),
 } = {}) {
   if (!provider || typeof provider.complete !== 'function') {
     throw new LlmError(
@@ -212,11 +214,30 @@ export async function completeStructured({
    * `withRetry` existed, was tested, and was called by nothing — a transient 503 from
    * Gemini failed a generation step outright, which is exactly what happened on the
    * first real call this project ever made.
+   *
+   * RATE LIMITING IS ADMITTED HERE FOR THE SAME REASON, AND INSIDE THE RETRY.
+   * The limiter had the identical fault: implemented, tested, and consulted by nothing,
+   * so RPM, TPM and RPD throttled exactly zero requests. Admission sits *inside* the
+   * retried function rather than around it because RPM and RPD count requests that
+   * reach the API, and a retry is another such request — the comment above already says
+   * a retry "consumes RPD (which the limiter owns)", and this is what makes that true.
+   * Acquiring once outside would let a three-attempt retry send three requests on one
+   * admission, which is how a 20-a-day ceiling disappears while the pacing looks right.
+   *
+   * It also means daily exhaustion is refused *before* a request is sent, as a
+   * non-retryable LLM_RATE_LIMITED the orchestrator can degrade on, instead of being
+   * discovered from a 429 that has already spent the attempt.
    */
   const attempt = async (overrides = {}) => {
     if (typeof spend === 'function') spend();
+    const body = { ...request, ...overrides, step };
     const { data } = await withRetry(
-      () => provider.complete({ ...request, ...overrides, step }),
+      async () => {
+        if (limiter) {
+          await limiter.acquire({ estimatedTokens: estimateTokens(body), label: step });
+        }
+        return provider.complete(body);
+      },
       { attempts, step, onRetry, ...(sleep ? { sleep } : {}) }
     );
     return data;

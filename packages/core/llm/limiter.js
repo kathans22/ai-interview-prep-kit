@@ -15,6 +15,19 @@
  * two limiters configured at "5 RPM" produce ten requests a minute, which is how a free
  * tier gets burned in an afternoon while every configuration file looks correct.
  *
+ * WHERE IT IS ACTUALLY CONSULTED: `completeStructured` in json.js, inside the retried
+ * function, so every generation step is paced and a retry spends admission of its own.
+ * That is the only call site, and it is the same funnel `withRetry` is wired into. For
+ * five stages this module was complete, tested, and consulted by nothing — throttling
+ * zero requests while every comment described throttling. If a future step calls
+ * `provider.complete` directly it bypasses both the limiter and the retry, which is why
+ * going through `completeStructured` is an invariant rather than a convention.
+ *
+ * AN UNCONFIGURED SINGLETON ADMITS EVERYTHING rather than pacing at this module's
+ * defaults — see `createPassThroughLimiter`. The real rates are the owner's, arriving via
+ * env at boot; inventing them here would have throttled the test suite with a real sleep
+ * and lied about the daily ceiling.
+ *
  * RPD IS DIFFERENT IN KIND. RPM and TPM clear within a minute, so waiting is the right
  * response. The daily ceiling does not clear until midnight Pacific, so waiting for it
  * would hang the batch run for hours. Exhaustion is refused immediately, with a typed
@@ -26,6 +39,35 @@
 import { LlmError, LLM_ERROR_CODES, RATE_LIMIT_KINDS } from './provider.js';
 
 const MINUTE_MS = 60_000;
+
+/**
+ * Roughly four characters to a token for English prose.
+ *
+ * Deliberately a local estimate rather than `provider.countTokens`: counting costs a
+ * request on some tiers (CF-025), and spending one of twenty daily requests to find out
+ * how big another request is would be a poor trade. TPM is a pacing input, not an
+ * accounting record — an estimate within a factor of two paces correctly, and the real
+ * usage comes back on the response.
+ */
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Estimate the token cost of a request, for TPM admission only.
+ *
+ * Counts the system instruction and the contents, which together are almost all of a
+ * request, plus the output allowance — a reply that may run to `maxOutputTokens` spends
+ * those tokens whether or not the caller thinks of them as input.
+ */
+export function estimateTokens(request = {}) {
+  const text = [request.systemInstruction, request.contents]
+    .filter((part) => typeof part === 'string')
+    .join('\n');
+
+  const input = Math.ceil(text.length / CHARS_PER_TOKEN);
+  const output = Number.isFinite(request.maxOutputTokens) ? request.maxOutputTokens : 0;
+
+  return input + output;
+}
 
 /**
  * A bucket that refills continuously rather than in steps, so a caller never waits for
@@ -242,11 +284,61 @@ export function configureLimiter(options = {}) {
   return shared;
 }
 
-/** The singleton, configured with defaults on first use if boot has not done so. */
-export function getLimiter() {
-  if (!shared) shared = createLimiter();
-  return shared;
+/**
+ * A limiter that admits everything, used when boot has not configured one.
+ *
+ * WHY PASS-THROUGH RATHER THAN DEFAULTS. The previous behaviour was to build a limiter
+ * from this module's defaults on first use. Those defaults are invented numbers — and
+ * one of them was provably wrong: `rpd = 200`, where this account's real free-tier
+ * ceiling is 20, read off a live 429. Pacing against numbers nobody chose is not pacing,
+ * it is a guess that looks like a guarantee, and it would have throttled every test
+ * suite to 5 requests a minute with a real sleep.
+ *
+ * The real rates live on the owner's rate-limit page and reach the process through
+ * `GEMINI_RPM`/`TPM`/`RPD`, so the only correct source is a `configureLimiter` call at
+ * boot (CF-024). When that has not happened — a test, a pure-function import, a fake
+ * provider that touches no network — there is nothing to pace and nothing to guess.
+ *
+ * The state is queryable rather than silent: `isLimiterConfigured()` lets an entry point
+ * assert at boot that it did its job, and `report()` says `configured: false` so a run
+ * that paced nothing cannot claim it did.
+ */
+function createPassThroughLimiter() {
+  let admitted = 0;
+  return {
+    async acquire() {
+      admitted += 1;
+      return { waitedMs: 0, remainingToday: Number.POSITIVE_INFINITY };
+    },
+    schedule: (task) => task(),
+    report: () => ({
+      configured: false,
+      admitted,
+      waitedMs: 0,
+      refusedRpd: 0,
+      remainingToday: Number.POSITIVE_INFINITY,
+    }),
+  };
 }
+
+/** Whether boot has configured the real limiter. Entry points should assert this. */
+export function isLimiterConfigured() {
+  return shared !== null;
+}
+
+/**
+ * The singleton.
+ *
+ * Returns the configured limiter when boot provided one, and a pass-through otherwise —
+ * see `createPassThroughLimiter` for why that is not a silent failure. The fallback is
+ * NOT cached into `shared`, so a later `configureLimiter` still succeeds rather than
+ * throwing "already configured" because something read the limiter during import.
+ */
+export function getLimiter() {
+  return shared ?? passThrough;
+}
+
+const passThrough = createPassThroughLimiter();
 
 /** Test-only. Production code must never call this. */
 export function resetLimiterForTests() {
