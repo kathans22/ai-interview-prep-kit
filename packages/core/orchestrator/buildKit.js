@@ -21,7 +21,6 @@
  * gaps recorded, not "failed".
  */
 
-import { createEmptyKit } from '../contracts/emptyKit.js';
 import { createBudget } from '../llm/budget.js';
 import { createSourceLedger } from '../retrieval/sourceLedger.js';
 import { createPageCache } from '../retrieval/pageCache.js';
@@ -29,6 +28,7 @@ import { allocate } from '../deterministic/scheduleAllocator.js';
 import { STEPS, STATUS, createReporter } from './steps.js';
 import { researchFromJd, researchCompany, generateQuestions } from './research.js';
 import { runCoverageLoop } from './coverageLoop.js';
+import { assembleKit } from './assemble.js';
 
 /** Defaults matching Block C, overridable by the adapter's config. */
 export const BUILD_DEFAULTS = Object.freeze({
@@ -151,30 +151,7 @@ export async function buildKit(input, deps = {}, hooks = {}) {
 
   // --- step 13: assemble ----------------------------------------------------
   reporter.emit(STEPS.ASSEMBLE, STATUS.STARTED);
-  const kit = createEmptyKit({
-    daysAvailable: days,
-    company: state.roleProfile.company,
-    companyUrl: companyUrl ?? '',
-    role: state.roleProfile.title,
-    location: state.roleProfile.location,
-    jdChars: jd.length,
-  });
-
-  kit.source.pages_used = ledger.pagesUsed();
-  kit.company_brief = state.companyBrief;
-  kit.role.title = state.roleProfile.title;
-  kit.role.seniority = state.roleProfile.seniority;
-  kit.role.responsibilities = state.roleProfile.responsibilities;
-  kit.role.requirements = state.requirements;
-  kit.questions = state.questions;
-  kit.flashcards = state.flashcards;
-  kit.schedule = schedule;
-  // Reality, not intention: the passes that actually ran, and the gaps that actually
-  // remain. Both are the kit telling the truth about itself.
-  kit.coverage = {
-    uncovered_requirement_ids: state.uncovered ?? [],
-    passes: state.coveragePasses,
-  };
+  const kit = assembleKit({ input: { jd, company_url: companyUrl, days }, state, schedule, ledger });
 
   reporter.emit(STEPS.ASSEMBLE, STATUS.DONE, {
     requirements: kit.role.requirements.length,
