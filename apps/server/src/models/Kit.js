@@ -130,6 +130,17 @@ const kitSchema = new mongoose.Schema(
     /** Practice ratings, append-only. See `practiceSchema`. */
     practice: { type: [practiceSchema], default: [] },
 
+    /**
+     * The last checkpoint, so an interrupted build can continue instead of restarting.
+     *
+     * Embedded rather than given its own collection: a checkpoint has exactly the
+     * lifetime of its kit, so deleting the kit must take it, and a separate collection
+     * would need its own cleanup and its own ownership check. Mixed because its shape
+     * belongs to core's `toCheckpoint`, and mirroring it here would create a second
+     * definition that silently wins the day the two disagree.
+     */
+    checkpoint: { type: mongoose.Schema.Types.Mixed, default: null },
+
     /** Set only when status is `failed`. Carries the code the caller can act on. */
     error: {
       code: { type: String, default: null },

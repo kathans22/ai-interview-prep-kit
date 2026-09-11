@@ -87,6 +87,16 @@ export const JD_MAX = 200_000;
 export const DAYS_MIN = 1;
 export const DAYS_MAX = 60;
 
+/**
+ * The most cases one batch may carry.
+ *
+ * A quota ceiling, not a performance one. Each kit costs up to twelve model calls
+ * against a free-tier limit of twenty a DAY, so five is already more than a day's
+ * budget — and a larger batch would not fail fast, it would fail two-thirds of the way
+ * through having spent everything.
+ */
+export const MAX_BATCH_CASES = 5;
+
 /** The body of POST /api/kits. */
 export function validateKitInput(body) {
   const check = createChecker();
@@ -170,4 +180,75 @@ export function validatePractice(body) {
 
   check.done();
   return { questionId, confidence, note: str(body.note) ?? '' };
+}
+
+/**
+ * Validate a batch of cases.
+ *
+ * Every fault in every case, reported at once. A batch that reports one error per
+ * submission takes as many round trips as it has typos, and the whole point of
+ * uploading a file is not to correct it one line at a time.
+ *
+ * The per-case shape is `validateKitInput`'s, not a second definition of it — a batch
+ * case that was allowed to differ from a single submission would be a second contract
+ * for the same thing.
+ *
+ * @param {unknown} body `{ cases: [...] }` or a bare array
+ * @param {{ maxCases?: number }} [options]
+ * @returns {{ id: string, jd: string, company_url: string, days: number }[]}
+ */
+export function validateBatchInput(body, { maxCases = MAX_BATCH_CASES } = {}) {
+  const cases = Array.isArray(body) ? body : body?.cases;
+
+  if (!Array.isArray(cases)) {
+    throw new ApiError(
+      'VALIDATION_FAILED',
+      'Send a JSON array of cases, or an object with a "cases" array. Each case is ' +
+        '{ id, jd, company_url?, days }.'
+    );
+  }
+  if (cases.length === 0) {
+    throw new ApiError('VALIDATION_FAILED', 'The batch contains no cases.');
+  }
+  if (cases.length > maxCases) {
+    // A quota guard, not a performance one. Each kit costs up to twelve model calls
+    // against a ceiling of twenty a DAY, so an unbounded batch is a whole day's quota
+    // spent in one request — and the user would not learn that until the failures came.
+    throw new ApiError(
+      'VALIDATION_FAILED',
+      `A batch may contain at most ${maxCases} cases. Each kit costs up to ` +
+        `${12} model calls against a small daily quota, so a larger batch would ` +
+        'exhaust it before finishing.'
+    );
+  }
+
+  const problems = [];
+  const seen = new Set();
+  const validated = [];
+
+  cases.forEach((entry, index) => {
+    const where = `cases[${index}]`;
+
+    // The id keys the result, so a duplicate makes two kits indistinguishable to the
+    // client that asked for them.
+    const id = typeof entry?.id === 'string' ? entry.id.trim() : '';
+    if (id === '') problems.push({ field: `${where}.id`, message: 'is required — it keys the result.' });
+    else if (seen.has(id)) problems.push({ field: `${where}.id`, message: `"${id}" is duplicated; ids must be unique.` });
+    else seen.add(id);
+
+    try {
+      const input = validateKitInput(entry);
+      validated.push({ id, ...input });
+    } catch (error) {
+      for (const field of error?.details?.fields ?? [{ field: 'case', message: error.message }]) {
+        problems.push({ field: `${where}.${field.field}`, message: field.message });
+      }
+    }
+  });
+
+  if (problems.length > 0) {
+    throw new ApiError('VALIDATION_FAILED', 'The batch is not usable.', { details: { fields: problems } });
+  }
+
+  return validated;
 }

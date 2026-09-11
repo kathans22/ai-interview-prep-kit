@@ -111,6 +111,15 @@ export function createMongoStore({ userModel = User, kitModel = Kit, now = () =>
     },
 
     /**
+     * Unscoped read, for the BUILD rather than for a request. See the memory store's
+     * note: a handler reaching for this instead of `findOwned` is the cross-user leak.
+     */
+    async findById(kitId) {
+      if (!usableId(kitId)) return null;
+      return plain(await kitModel.findById(kitId).lean());
+    },
+
+    /**
      * Owner is part of the FILTER, never a check afterwards.
      *
      * Loading by id and comparing ownership in JavaScript is the shape that leaks: one

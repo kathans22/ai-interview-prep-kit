@@ -77,6 +77,18 @@ export function createMemoryStore({ now = () => new Date() } = {}) {
       return copy(kit);
     },
 
+    /**
+     * Unscoped read, for the BUILD rather than for a request.
+     *
+     * Deliberately separate from `findOwned` and deliberately named differently: a
+     * handler reaching for this instead of `findOwned` is the cross-user leak, so the
+     * two must not be easy to confuse. Used only by the checkpoint store, which is
+     * called by a build that already knows which kit it is building.
+     */
+    async findById(kitId) {
+      return copy(kits.get(String(kitId)) ?? null);
+    },
+
     /** Owner is part of the lookup. A kit belonging to someone else is simply not found. */
     async findOwned({ kitId, userId }) {
       const kit = kits.get(String(kitId));

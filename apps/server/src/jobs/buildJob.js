@@ -78,7 +78,7 @@ export function createJobRunner({ store, concurrency = 2, build = buildKit, log 
     };
   }
 
-  async function runOne({ kitId, input, config, deps }) {
+  async function runOne({ kitId, input, config, deps, resumeFrom = null }) {
     const startedAt = Date.now();
 
     await store.kits.write({
@@ -90,7 +90,10 @@ export function createJobRunner({ store, concurrency = 2, build = buildKit, log 
 
     try {
       const result = await build(
-        { jd: input.jd, company_url: input.company_url, days: input.days, kitId },
+        // `resumeFrom` reaches buildKit as part of the input, which is where it belongs:
+        // resuming is a property of the run being asked for, not of the collaborators
+        // it is given. Null for an ordinary build, so the normal path is unchanged.
+        { jd: input.jd, company_url: input.company_url, days: input.days, kitId, resumeFrom },
         { ...deps, config },
         {
           onProgress: (step, status, event) => {

@@ -21,7 +21,7 @@
  */
 
 import { route, ApiError } from './errors.js';
-import { validateKitInput } from './validate.js';
+import { validateKitInput, validateBatchInput } from './validate.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
 import { duplicateMessage, duplicateQuery, describeDuplicate } from '../models/idempotency.js';
 
@@ -103,6 +103,181 @@ export function mountKitRoutes(app, { startJob = null, rateLimit = (req, res, ne
       }
 
       response.status(202).json({ kitId, status: 'queued', duplicate: false });
+    })
+  );
+
+  /**
+   * POST /api/kits/batch — several postings at once.
+   *
+   * The same thing the CLI does, through HTTP: one kit per case, each with its own
+   * `days`, all queued and none awaited.
+   *
+   * EVERY CASE GETS AN ANSWER, INCLUDING THE ONES THAT DID NOT START. The response has
+   * one entry per input case, keyed by the id the caller gave, saying whether it was
+   * queued or matched an existing kit. A response that listed only the new kits would
+   * leave the client to work out which of its cases were missing and why.
+   *
+   * IT IS RATE LIMITED AND CAPPED. Five kits is up to sixty model calls against a
+   * ceiling of twenty a day, so the cap is in `validateBatchInput` and this route draws
+   * on the same generation limiter as single creation. Without both, one request is a
+   * whole day's quota and the user finds out from the failures.
+   *
+   * IDEMPOTENCY IS PER CASE, using the same policy as a single submission — uploading
+   * the same file twice must not build everything again.
+   */
+  app.post(
+    '/api/kits/batch',
+    requireAuth,
+    rateLimit,
+    route(async (request, response) => {
+      const cases = validateBatchInput(request.body);
+      const userId = request.session.userId;
+      const windowMs = request.config.budgets.idempotencyWindowMs;
+
+      const results = [];
+
+      for (const kase of cases) {
+        const { id, ...input } = kase;
+        const query = duplicateQuery(input, { windowMs });
+
+        // eslint-disable-next-line no-await-in-loop
+        const existing = await request.store.kits.findDuplicate({ userId, ...query });
+
+        if (existing) {
+          results.push({
+            id,
+            kitId: String(existing.id ?? existing._id),
+            status: existing.status,
+            duplicate: true,
+            reason: describeDuplicate(existing),
+          });
+          continue;
+        }
+
+        // eslint-disable-next-line no-await-in-loop
+        const created = await request.store.kits.create({
+          userId,
+          input,
+          jdHash: query.jdHash,
+          status: 'queued',
+        });
+
+        const kitId = String(created.id ?? created._id);
+
+        if (startJob) {
+          // Not awaited, exactly as single creation is not. The runner's own
+          // concurrency decides how many actually build at once; queueing five here
+          // does not mean five simultaneous calls to Gemini.
+          startJob({ kitId, userId, input, config: request.config, deps: request.deps });
+        }
+
+        results.push({ id, kitId, status: 'queued', duplicate: false, reason: 'NO_RECENT_MATCH' });
+      }
+
+      const queued = results.filter((entry) => !entry.duplicate).length;
+
+      // 202 whenever anything was accepted for processing. If every case matched an
+      // existing kit then nothing was, and that is a 200 — the same distinction single
+      // creation makes.
+      response.status(queued > 0 ? 202 : 200).json({
+        accepted: queued,
+        duplicates: results.length - queued,
+        kits: results,
+        ...(queued === 0 ? { message: duplicateMessage(windowMs) } : {}),
+      });
+    })
+  );
+
+  /**
+   * POST /api/kits/:id/resume — continue an interrupted generation.
+   *
+   * WHAT "INTERRUPTED" MEANS. A kit that failed, or one left `running` by a process
+   * that died. Not a `ready` kit — that one is finished, and "resuming" it would mean
+   * rebuilding a kit the user already has while spending a fresh twelve calls. Not a
+   * `queued` one either: it has not started, so it has nothing to continue from and is
+   * already going to run.
+   *
+   * WHY IT IS CHEAPER THAN STARTING AGAIN. `buildKit` takes `resumeFrom` and treats
+   * every research step as "if this is not already in state, do it", so a resume is an
+   * overlay rather than a second code path. The saved page cache goes back in too, so a
+   * company site crawled before the interruption is not fetched again. Measured in
+   * Stage 7: eight model calls became one and eight HTTP fetches became zero.
+   *
+   * A CHECKPOINT FROM A DIFFERENT POSTING IS REFUSED, by core, on its own input
+   * fingerprint. This route does not re-check that — duplicating the guard would create
+   * a second answer to the same question.
+   *
+   * IT SPENDS QUOTA, so it takes the generation limiter like creation does.
+   */
+  app.post(
+    '/api/kits/:id/resume',
+    requireAuth,
+    rateLimit,
+    withOwnedKit(),
+    route(async (request, response) => {
+      const kitDoc = request.kit;
+      const kitId = String(kitDoc.id ?? kitDoc._id);
+
+      if (kitDoc.status === 'ready') {
+        throw new ApiError(
+          'KIT_ALREADY_READY',
+          'This kit finished building. Regenerate a section if you want different ' +
+            'content — resuming would rebuild a kit you already have and spend the quota twice.'
+        );
+      }
+      if (kitDoc.status === 'queued') {
+        throw new ApiError(
+          'KIT_NOT_STARTED',
+          'This kit is queued and has not started yet, so there is nothing to resume.'
+        );
+      }
+      if (!startJob) {
+        throw new ApiError('GENERATION_UNAVAILABLE', 'No build runner is configured.');
+      }
+
+      const resumable = Boolean(kitDoc.checkpoint);
+
+      // Cleared before requeueing, and in the same write that marks it queued. A failed
+      // kit that keeps its old error would show the previous failure the whole time the
+      // retry is running, which reads as "still broken".
+      await request.store.kits.write({
+        kitId,
+        set: {
+          status: 'queued',
+          error: { code: null, message: null, at: null },
+        },
+        push: {
+          progress: {
+            step: 'resume',
+            status: 'started',
+            detail: { from: resumable ? 'checkpoint' : 'the beginning' },
+            at: new Date(),
+          },
+        },
+      });
+
+      startJob({
+        kitId,
+        userId: request.session.userId,
+        input: kitDoc.input,
+        config: request.config,
+        deps: request.deps,
+        // Core loads the record itself and refuses one whose fingerprint does not match
+        // this posting. Passing the id rather than the record keeps that guard in one place.
+        resumeFrom: resumable ? kitId : null,
+      });
+
+      response.status(202).json({
+        kitId,
+        status: 'queued',
+        // Said plainly, because the two cost very different amounts: without a
+        // checkpoint this is a full rebuild, and the user is entitled to know that
+        // before it spends their day's quota.
+        resumedFrom: resumable ? 'checkpoint' : 'the beginning',
+        message: resumable
+          ? 'Continuing from the last checkpoint. Completed steps will be skipped.'
+          : 'No checkpoint was saved for this kit, so it will build again from the start.',
+      });
     })
   );
 

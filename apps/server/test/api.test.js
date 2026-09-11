@@ -224,6 +224,7 @@ test('EXIT CHECK: signed out, every kit endpoint returns 401', async () => {
 
   const endpoints = [
     ['POST', '/api/kits', { jd: JD, days: 3 }],
+    ['POST', '/api/kits/batch', { cases: [{ id: 'a', jd: JD, days: 3 }] }],
     ['GET', '/api/kits', null],
     ['GET', '/api/kits/anything', null],
     ['GET', '/api/kits/anything/progress', null],
@@ -231,6 +232,7 @@ test('EXIT CHECK: signed out, every kit endpoint returns 401', async () => {
     ['PATCH', '/api/kits/anything', { revision: 0, ops: [{ type: 'pin', id: 'q1' }] }],
     ['POST', '/api/kits/anything/regenerate', { section: 'questions', category: 'technical', revision: 0 }],
     ['POST', '/api/kits/anything/undo-regenerate', { section: 'questions', revision: 0 }],
+    ['POST', '/api/kits/anything/resume', null],
     ['POST', '/api/kits/anything/practice', { questionId: 'q1', confidence: 3 }],
     ['GET', '/api/kits/anything/practice', null],
     ['DELETE', '/api/kits/anything', null],
@@ -288,6 +290,7 @@ test("EXIT CHECK: a kit created by user A is invisible to user B", async () => {
     ['GET', `/api/kits/${kitId}/progress/poll`, null],
     ['PATCH', `/api/kits/${kitId}`, { revision: 1, ops: [{ type: 'pin', id: 'q1' }] }],
     ['POST', `/api/kits/${kitId}/regenerate`, { section: 'questions', category: 'technical', revision: 1 }],
+    ['POST', `/api/kits/${kitId}/resume`, null],
     ['POST', `/api/kits/${kitId}/practice`, { questionId: 'q1', confidence: 3 }],
     ['DELETE', `/api/kits/${kitId}`, null],
   ];
@@ -515,6 +518,221 @@ test('two users submitting the same posting each get their own kit', async () =>
   assert.notEqual(his.body.kitId, hers.body.kitId);
 
   await jobs.drain();
+});
+
+// ===========================================================================
+// POST /api/kits/batch — named in Stage 9's brief, missing until it was audited
+// ===========================================================================
+
+function batchCase(id, days, extra = '') {
+  return {
+    id,
+    jd: `${JD} Case ${id}.${extra}`,
+    company_url: '',
+    days,
+  };
+}
+
+test('a batch creates one kit per case, each with its own days', async () => {
+  const alice = client();
+  await alice.signUp('batch@example.com');
+
+  const response = await alice.call('/api/kits/batch', {
+    method: 'POST',
+    body: JSON.stringify({
+      cases: [batchCase('one', 2), batchCase('two', 5), batchCase('three', 1)],
+    }),
+  });
+
+  assert.equal(response.status, 202);
+  assert.equal(response.body.accepted, 3);
+  assert.equal(response.body.duplicates, 0);
+
+  // Keyed by the id the CALLER gave, in input order — otherwise a client cannot tell
+  // which of its cases produced which kit.
+  assert.deepEqual(response.body.kits.map((entry) => entry.id), ['one', 'two', 'three']);
+  assert.ok(response.body.kits.every((entry) => entry.kitId && entry.status === 'queued'));
+
+  await jobs.drain();
+
+  const listed = await alice.call('/api/kits');
+  assert.equal(listed.body.kits.length, 3);
+  // Each case's OWN days reached its kit. One default applied to all three would pass
+  // every validator and be wrong for two of them.
+  assert.deepEqual(listed.body.kits.map((kit) => kit.days).sort(), [1, 2, 5]);
+});
+
+test('a batch reports every case, including the ones that were duplicates', async () => {
+  const alice = client();
+  await alice.signUp('batch-dup@example.com');
+
+  const cases = [batchCase('a', 2), batchCase('b', 3)];
+  await alice.call('/api/kits/batch', { method: 'POST', body: JSON.stringify({ cases }) });
+  await jobs.drain();
+
+  // The same file again, plus one genuinely new case.
+  const second = await alice.call('/api/kits/batch', {
+    method: 'POST',
+    body: JSON.stringify({ cases: [...cases, batchCase('c', 4)] }),
+  });
+
+  assert.equal(second.status, 202, 'something was still accepted, so 202');
+  assert.equal(second.body.accepted, 1);
+  assert.equal(second.body.duplicates, 2);
+  assert.deepEqual(
+    second.body.kits.map((entry) => entry.duplicate),
+    [true, true, false]
+  );
+
+  await jobs.drain();
+});
+
+test('a batch of nothing but duplicates is a 200, not a 202', async () => {
+  const alice = client();
+  await alice.signUp('batch-alldup@example.com');
+
+  const cases = [batchCase('x', 2)];
+  await alice.call('/api/kits/batch', { method: 'POST', body: JSON.stringify({ cases }) });
+  await jobs.drain();
+
+  const again = await alice.call('/api/kits/batch', { method: 'POST', body: JSON.stringify({ cases }) });
+
+  // Nothing was accepted for processing, which is the same distinction single creation
+  // makes between 202 and 200.
+  assert.equal(again.status, 200);
+  assert.equal(again.body.accepted, 0);
+  assert.match(again.body.message, /already built/i);
+});
+
+test('a batch reports every fault at once, and is capped for quota', async () => {
+  const alice = client();
+  await alice.signUp('batch-bad@example.com');
+
+  const bad = await alice.call('/api/kits/batch', {
+    method: 'POST',
+    body: JSON.stringify({
+      cases: [
+        { id: 'ok', jd: JD, days: 3 },
+        { id: '', jd: 'too short', days: 0 },
+        { id: 'ok', jd: JD, days: 2 },
+      ],
+    }),
+  });
+
+  assert.equal(bad.status, 400);
+  assert.equal(bad.body.error.code, 'VALIDATION_FAILED');
+  const fields = bad.body.error.details.fields.map((entry) => entry.field);
+  // Every fault in every case, at once. One error per submission would take as many
+  // round trips as the file has typos.
+  assert.ok(fields.some((field) => field.includes('[1].id')), 'missing id');
+  assert.ok(fields.some((field) => field.includes('[1].jd')), 'short jd');
+  assert.ok(fields.some((field) => field.includes('[1].days')), 'bad days');
+  assert.ok(fields.some((field) => field.includes('[2].id')), 'duplicate id');
+
+  // The cap is a quota guard: each kit costs up to twelve calls against twenty a day.
+  const tooMany = await alice.call('/api/kits/batch', {
+    method: 'POST',
+    body: JSON.stringify({ cases: Array.from({ length: 9 }, (_, i) => batchCase(`n${i}`, 2)) }),
+  });
+  assert.equal(tooMany.status, 400);
+  assert.match(tooMany.body.error.message, /at most 5 cases/i);
+});
+
+test('a bare array is accepted as well as { cases: [...] }', async () => {
+  const alice = client();
+  await alice.signUp('batch-bare@example.com');
+
+  const response = await alice.call('/api/kits/batch', {
+    method: 'POST',
+    body: JSON.stringify([batchCase('bare', 2)]),
+  });
+
+  assert.equal(response.status, 202);
+  assert.equal(response.body.accepted, 1);
+  await jobs.drain();
+});
+
+// ===========================================================================
+// POST /api/kits/:id/resume — also named in the brief, also missing
+// ===========================================================================
+
+test('a failed kit can be resumed, and says it is starting over without a checkpoint', async () => {
+  const alice = client();
+  await alice.signUp('resume@example.com');
+
+  const user = await store.users.findByEmail('resume@example.com');
+  const record = await store.kits.create({
+    userId: user.id,
+    input: { jd: JD, company_url: '', days: 2 },
+    jdHash: 'resume-hash',
+    status: 'queued',
+  });
+  await store.kits.write({
+    kitId: record.id,
+    set: { status: 'failed', error: { code: 'LLM_UNAVAILABLE', message: 'the model was down', at: new Date() } },
+  });
+
+  const response = await alice.call(`/api/kits/${record.id}/resume`, { method: 'POST' });
+
+  assert.equal(response.status, 202);
+  assert.equal(response.body.status, 'queued');
+  assert.equal(response.body.resumedFrom, 'the beginning');
+  // Said plainly, because a rebuild and a resume cost very different amounts of a
+  // twenty-a-day quota.
+  assert.match(response.body.message, /no checkpoint/i);
+
+  await jobs.drain();
+
+  const after = await alice.call(`/api/kits/${record.id}`);
+  // The old failure was cleared when it was requeued — leaving it would show the
+  // previous error for the whole of the retry, which reads as "still broken".
+  assert.equal(after.body.error, null);
+});
+
+test('a kit with a checkpoint resumes from it', async () => {
+  const alice = client();
+  await alice.signUp('resume-cp@example.com');
+
+  const user = await store.users.findByEmail('resume-cp@example.com');
+  const record = await store.kits.create({
+    userId: user.id,
+    input: { jd: JD, company_url: '', days: 2 },
+    jdHash: 'resume-cp-hash',
+    status: 'running',
+  });
+  await store.kits.write({
+    kitId: record.id,
+    set: { checkpoint: { version: 1, kitId: String(record.id), state: {}, input: {} } },
+  });
+
+  const response = await alice.call(`/api/kits/${record.id}/resume`, { method: 'POST' });
+
+  assert.equal(response.status, 202);
+  assert.equal(response.body.resumedFrom, 'checkpoint');
+  await jobs.drain();
+});
+
+test('a finished or unstarted kit cannot be resumed', async () => {
+  const alice = client();
+  await alice.signUp('resume-bad@example.com');
+
+  const ready = await giveKitTo('resume-bad@example.com');
+  const finished = await alice.call(`/api/kits/${ready}/resume`, { method: 'POST' });
+  assert.equal(finished.status, 409);
+  // Resuming a finished kit would rebuild something the user already has and spend a
+  // fresh twelve calls doing it.
+  assert.equal(finished.body.error.code, 'KIT_ALREADY_READY');
+
+  const user = await store.users.findByEmail('resume-bad@example.com');
+  const queued = await store.kits.create({
+    userId: user.id,
+    input: { jd: JD, company_url: '', days: 2 },
+    jdHash: 'queued-hash',
+    status: 'queued',
+  });
+  const notStarted = await alice.call(`/api/kits/${queued.id}/resume`, { method: 'POST' });
+  assert.equal(notStarted.status, 409);
+  assert.equal(notStarted.body.error.code, 'KIT_NOT_STARTED');
 });
 
 // ===========================================================================

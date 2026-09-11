@@ -48,6 +48,7 @@ import { mountPracticeRoutes } from './http/practiceRoutes.js';
 import { createLimiters } from './http/rateLimit.js';
 import { sessionMiddleware } from './auth/session.js';
 import { createMongoStore, connectMongo, disconnectMongo } from './store/mongoStore.js';
+import { createKitCheckpointStore } from './store/checkpointStore.js';
 import { createJobRunner } from './jobs/buildJob.js';
 import { createRunContext } from './cli/runCase.js';
 
@@ -115,6 +116,10 @@ export async function start({ env = process.env, provider: injectedProvider = nu
   // second pipeline, which is the one thing the monorepo exists to prevent.
   const runContext = createRunContext({ config, provider });
 
+  // Checkpoints live on the kit documents themselves, so they share a lifetime with the
+  // kit and need no cleanup of their own.
+  const checkpointStore = createKitCheckpointStore(store);
+
   const jobs = createJobRunner({
     store,
     concurrency: config.budgets.batchConcurrency,
@@ -137,6 +142,10 @@ export async function start({ env = process.env, provider: injectedProvider = nu
           crawlMaxPages: config.retrieval.crawlMaxPages,
           crawlMaxDepth: config.retrieval.crawlMaxDepth,
           crawlConcurrency: config.retrieval.crawlConcurrency,
+          // Without this a build cannot be resumed — it still runs, it just has nothing
+          // to continue from, and `POST /api/kits/:id/resume` degrades to a full
+          // rebuild. This is the injection CF-038 has been waiting for.
+          checkpointStore,
         },
         hooks
       ),
