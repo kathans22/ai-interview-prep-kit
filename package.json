@@ -13,7 +13,7 @@
     "apps/*"
   ],
   "scripts": {
-    "evaluate": "node apps/server/src/cli/evaluate.js",
+    "evaluate": "node --env-file-if-exists=.env apps/server/src/cli/evaluate.js",
     "eval:extraction": "node scripts/evalExtraction.js",
     "smoke": "node scripts/smoke.js",
     "dev:server": "npm run dev --workspace @aipk/server",

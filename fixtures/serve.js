@@ -29,7 +29,7 @@
 import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, normalize, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const SITES_ROOT = join(dirname(fileURLToPath(import.meta.url)), 'sites');
 
@@ -155,7 +155,11 @@ export async function startFixtureServer({ port = 0, host = '127.0.0.1' } = {}) 
 }
 
 // Direct execution: node fixtures/serve.js [port]
-if (process.argv[1] && import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}`) {
+//
+// pathToFileURL, not a hand-built file:// string: on Windows the latter differs from
+// import.meta.url in both slash count and percent-encoding, so the comparison silently
+// fails and the server never starts.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const port = Number(process.argv[2] ?? process.env.FIXTURE_PORT ?? 8099);
   const { origin } = await startFixtureServer({ port, host: '127.0.0.1' });
   process.stdout.write(
