@@ -43,7 +43,17 @@ test('root manifest defines every script the project promises', async () => {
 
 test('the frozen batch command points at a file that exists', async () => {
   const { scripts } = await readJson('package.json');
-  const entry = scripts.evaluate.replace(/^node\s+/, '');
+
+  // The script may carry node flags (--env-file-if-exists=.env). The entry point is the
+  // last token that is not a flag — stripping only a leading "node " would break the
+  // moment a flag is added, which is a test failing for a reason unrelated to the thing
+  // it is meant to protect.
+  const entry = scripts.evaluate
+    .split(/\s+/)
+    .filter((token) => token !== 'node' && !token.startsWith('-'))
+    .at(-1);
+
+  assert.ok(entry, `could not find an entry point in "${scripts.evaluate}"`);
   await assert.doesNotReject(
     access(join(repoRoot, entry)),
     `root script "evaluate" points at ${entry}, which does not exist`
