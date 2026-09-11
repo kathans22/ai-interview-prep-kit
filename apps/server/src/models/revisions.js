@@ -94,7 +94,7 @@ export async function writeWithRevision({
   const updated = await model.findOneAndUpdate(
     { _id: kitId, revision: expectedRevision },
     update,
-    { new: true }
+    { returnDocument: 'after' }
   );
 
   if (updated) return updated;
@@ -128,7 +128,7 @@ export async function writeUnchecked({ model, kitId, set = {}, push = null, now 
   };
   if (push) update.$push = push;
 
-  return model.findByIdAndUpdate(kitId, update, { new: true });
+  return model.findByIdAndUpdate(kitId, update, { returnDocument: 'after' });
 }
 
 /**
