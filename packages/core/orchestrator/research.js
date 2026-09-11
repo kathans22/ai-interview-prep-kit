@@ -38,7 +38,7 @@ import { crawlSite } from '../retrieval/crawl.js';
 import { findHiringPage } from '../retrieval/findHiringPage.js';
 import { searchPublicDiscussion } from '../retrieval/searchPublicDiscussion.js';
 import { QUESTION_CATEGORIES } from '../contracts/kitSchema.js';
-import { STEPS, STATUS } from './steps.js';
+import { STEPS, STATUS, describeStepFailure } from './steps.js';
 
 /** A step that cannot run because the budget is gone looks the same as one skipped. */
 function isBudgetExhausted(error) {
@@ -92,7 +92,7 @@ export async function researchFromJd({ jd, deps, reporter, budget, state }) {
       // A kit with empty title and seniority is hollow but valid, and the requirements
       // are already safe. Losing the profile is not worth losing them.
       state.roleProfile = { title: '', seniority: '', company: '', location: '', responsibilities: [], missing: ['all'] };
-      state.notes.push(`Role profile unavailable (${error.code ?? 'error'}): ${error.message}`);
+      state.notes.push(`Role profile unavailable (${describeStepFailure(error)}): ${error.message}`);
       reporter.emit(STEPS.ROLE_PROFILE, STATUS.FAILED, { code: error.code });
     }
   }
@@ -134,7 +134,7 @@ export async function researchCompany({ companyUrl, deps, reporter, budget, stat
     } catch (error) {
       // crawlSite is not supposed to throw; if it does, the kit still proceeds.
       state.crawl = { pages: [], skipped: [], hiringPageCandidates: [] };
-      state.notes.push(`Crawl failed outright (${error.code ?? 'error'}): ${error.message}`);
+      state.notes.push(`Crawl failed outright (${describeStepFailure(error)}): ${error.message}`);
       reporter.emit(STEPS.CRAWL, STATUS.FAILED, { code: error.code });
     }
   }
@@ -164,7 +164,7 @@ export async function researchCompany({ companyUrl, deps, reporter, budget, stat
     } catch (error) {
       state.hiringPage = null;
       state.hiringPageReason = isBudgetExhausted(error) ? 'BUDGET_EXHAUSTED' : 'LOOKUP_FAILED';
-      state.notes.push(`Hiring page lookup failed (${error.code ?? 'error'}).`);
+      state.notes.push(`Hiring page lookup failed (${describeStepFailure(error)}).`);
       reporter.emit(STEPS.HIRING_PAGE, STATUS.FAILED, { code: error.code });
     }
   }
@@ -223,7 +223,7 @@ export async function researchCompany({ companyUrl, deps, reporter, budget, stat
         what_they_do: '',
         sources: ledger.pagesUsed(),
       };
-      state.notes.push(`Company brief failed (${error.code ?? 'error'}).`);
+      state.notes.push(`Company brief failed (${describeStepFailure(error)}).`);
       reporter.emit(STEPS.COMPANY_BRIEF, STATUS.FAILED, { code: error.code });
     }
   }
@@ -247,7 +247,7 @@ export async function researchCompany({ companyUrl, deps, reporter, budget, stat
         });
       } catch (error) {
         state.hiringProcess = null;
-        state.notes.push(`Hiring process extraction failed (${error.code ?? 'error'}).`);
+        state.notes.push(`Hiring process extraction failed (${describeStepFailure(error)}).`);
         reporter.emit(STEPS.HIRING_PROCESS, STATUS.FAILED, { code: error.code });
       }
     }
@@ -322,7 +322,7 @@ export async function generateQuestions({ deps, reporter, budget, state }) {
       });
     } catch (error) {
       state.failedCategories.push({ category, reason: error.code ?? 'ERROR' });
-      state.notes.push(`The ${category} question call failed (${error.code ?? 'error'}).`);
+      state.notes.push(`The ${category} question call failed (${describeStepFailure(error)}).`);
       reporter.emit(STEPS.QUESTIONS, STATUS.FAILED, { category, code: error.code });
     }
   }

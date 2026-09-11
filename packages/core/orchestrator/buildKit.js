@@ -25,7 +25,7 @@ import { createBudget } from '../llm/budget.js';
 import { createSourceLedger } from '../retrieval/sourceLedger.js';
 import { createPageCache } from '../retrieval/pageCache.js';
 import { allocate } from '../deterministic/scheduleAllocator.js';
-import { STEPS, STATUS, createReporter } from './steps.js';
+import { STEPS, STATUS, createReporter, describeStepFailure } from './steps.js';
 import { researchFromJd, researchCompany, generateQuestions } from './research.js';
 import { runCoverageLoop } from './coverageLoop.js';
 import { assembleKit } from './assemble.js';
@@ -250,7 +250,7 @@ export async function buildKit(input, deps = {}, hooks = {}) {
       if (result.skipped) state.notes.push(result.skipped);
     } catch (error) {
       // Flashcards are the one piece of content the kit is explicitly complete without.
-      state.notes.push(`Flashcard generation failed (${error.code ?? 'error'}); the kit has none.`);
+      state.notes.push(`Flashcard generation failed (${describeStepFailure(error)}); the kit has none.`);
       reporter.emit(STEPS.FLASHCARDS, STATUS.FAILED, { code: error.code });
     }
   }

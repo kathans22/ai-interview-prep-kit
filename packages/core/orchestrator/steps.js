@@ -110,3 +110,30 @@ export function createReporter(onProgress) {
     events: () => [...events],
   };
 }
+
+/**
+ * Describe a failed step for `run_notes`.
+ *
+ * The CODE alone is not enough when the code is LLM_RATE_LIMITED. RPM, TPM and RPD are
+ * three different problems with three different answers — wait a minute, shorten the
+ * request, or stop for the day — and the provider has already worked out which, from the
+ * quota id in Google's own 429. Dropping it meant a live run reported
+ * "the technical question call failed (LLM_RATE_LIMITED)" and left us guessing which
+ * limit to lower, and then guessing again when the first guess was wrong (CF-053).
+ *
+ * `retryAfterMs` comes from the response header when Google sends one, and is the only
+ * authoritative statement of how long to wait that this system ever receives.
+ */
+export function describeStepFailure(error) {
+  const parts = [error?.code ?? 'error'];
+
+  const limit = error?.details?.limit;
+  // Case-insensitive: the constant is 'UNKNOWN', and a note reading "limit=UNKNOWN"
+  // asserts knowledge the system does not have.
+  if (limit && String(limit).toUpperCase() !== 'UNKNOWN') parts.push(`limit=${limit}`);
+
+  const retryAfter = error?.details?.retryAfterMs;
+  if (Number.isFinite(retryAfter)) parts.push(`retryAfter=${Math.round(retryAfter / 1000)}s`);
+
+  return parts.join(', ');
+}

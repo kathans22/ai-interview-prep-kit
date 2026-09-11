@@ -36,6 +36,7 @@ import {
 } from '../llm/limiter.js';
 import { withRetry, isRetryable, backoffDelay } from '../llm/retry.js';
 import { parseResponse, parseJsonText, completeStructured, buildRepairInstruction } from '../llm/json.js';
+import { describeStepFailure } from '../orchestrator/steps.js';
 import { safePrompt, safePromptMany, truncate, CHARACTER_BUDGETS } from '../llm/safePrompt.js';
 import { createBudget, createUnlimitedBudget, BudgetExhaustedError } from '../llm/budget.js';
 import { createFakeProvider, fakeResponse } from '../llm/fakeProvider.js';
@@ -850,3 +851,41 @@ test('configuring one model twice is refused, exactly as the default is', () => 
 
   resetLimiterForTests();
 });
+
+test('a failure description names WHICH limit was hit, not just that one was', () => {
+  // The whole point. "LLM_RATE_LIMITED" alone sent this project guessing at RPM twice
+  // (CF-053), when the provider had already read the answer out of Google's quota id.
+  assert.equal(
+    describeStepFailure({
+      code: 'LLM_RATE_LIMITED',
+      details: { limit: RATE_LIMIT_KINDS.RPD, retryAfterMs: 45_000 },
+    }),
+    'LLM_RATE_LIMITED, limit=RPD, retryAfter=45s'
+  );
+
+  assert.equal(
+    describeStepFailure({ code: 'LLM_RATE_LIMITED', details: { limit: RATE_LIMIT_KINDS.RPM } }),
+    'LLM_RATE_LIMITED, limit=RPM'
+  );
+
+  // An unknown limit adds nothing rather than asserting something false.
+  assert.equal(
+    describeStepFailure({ code: 'LLM_RATE_LIMITED', details: { limit: RATE_LIMIT_KINDS.UNKNOWN } }),
+    'LLM_RATE_LIMITED'
+  );
+  assert.equal(describeStepFailure({ code: 'GENERATION_INVALID_OUTPUT' }), 'GENERATION_INVALID_OUTPUT');
+  assert.equal(describeStepFailure(undefined), 'error');
+});
+
+test('the real Gemini daily-quota 429 classifies as RPD and survives into the note', () => {
+  // The exact body this project received on 2026-09-10, which is how RPD=20 was found.
+  const message =
+    'You exceeded your current quota. quotaId: ' +
+    'GenerateRequestsPerDayPerProjectPerModel-FreeTier, quotaValue: 20. ' +
+    'See https://ai.google.dev/gemini-api/docs/rate-limits for more.';
+
+  const limit = classifyRateLimit(message);
+  assert.equal(limit, RATE_LIMIT_KINDS.RPD);
+  assert.match(describeStepFailure({ code: 'LLM_RATE_LIMITED', details: { limit } }), /limit=RPD/);
+});
+
