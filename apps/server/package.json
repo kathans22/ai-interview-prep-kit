@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@aipk/core": "*",
+    "bcryptjs": "^3.0.3",
+    "express": "^5.2.1",
     "mongoose": "^9.10.0"
   }
 }
