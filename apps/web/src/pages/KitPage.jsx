@@ -25,7 +25,7 @@ import { useParams } from 'react-router-dom';
 import Card from '../ui/Card.jsx';
 import SectionState from '../ui/SectionState.jsx';
 import { useKit } from '../hooks/useKits.js';
-import { STREAM_STATES, useProgress } from '../hooks/useProgress.js';
+import { STREAM_STATES, describeConnection, useProgress } from '../hooks/useProgress.js';
 import ProgressSteps from '../kits/ProgressSteps.jsx';
 import { deriveSteps, summarise } from '../kits/steps.js';
 
@@ -65,6 +65,7 @@ export default function KitPage() {
   // 15 steps done" forever, with every row resolved above it.
   const liveStatus = FINISHED.has(status) ? status : (stream.status ?? status);
   const steps = deriveSteps(stream.progress);
+  const connectionNotice = describeConnection(stream.connection);
 
   return (
     <section>
@@ -85,6 +86,22 @@ export default function KitPage() {
         hasContent={Boolean(status)}
       >
         <div className="mt-6 space-y-6">
+          {/* How progress is arriving, but only when that is not the happy path. A badge
+              reading "Connected" is noise; its absence is what makes "the live
+              connection dropped" noticeable. Not a live region — the step list is the
+              one on this screen, and a second would announce everything twice. */}
+          {connectionNotice && !FINISHED.has(liveStatus) ? (
+            <p
+              className={
+                connectionNotice.tone === 'warn'
+                  ? 'rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900'
+                  : 'rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700'
+              }
+            >
+              {connectionNotice.text}
+            </p>
+          ) : null}
+
           <Card title={summarise(steps, liveStatus)} titleAs="h2">
             <ProgressSteps steps={steps} busy={!FINISHED.has(liveStatus)} />
           </Card>
