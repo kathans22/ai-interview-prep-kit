@@ -712,6 +712,85 @@ test('a kit with a checkpoint resumes from it', async () => {
   await jobs.drain();
 });
 
+test('fresh:true ignores the checkpoint, discards it, and says so', async () => {
+  // Without this flag the endpoint has ONE behaviour that depends on hidden state, so a
+  // client cannot offer "continue" and "start over" as distinct actions — only one
+  // button whose effect it explains afterwards.
+  const alice = client();
+  await alice.signUp('resume-fresh@example.com');
+
+  const user = await store.users.findByEmail('resume-fresh@example.com');
+  const record = await store.kits.create({
+    userId: user.id,
+    input: { jd: JD, company_url: '', days: 2 },
+    jdHash: 'resume-fresh-hash',
+    status: 'running',
+  });
+  await store.kits.write({
+    kitId: record.id,
+    set: { checkpoint: { version: 1, kitId: String(record.id), state: {}, input: {} } },
+  });
+
+  // Sanity: the same kit WOULD have resumed from the checkpoint.
+  assert.equal((await alice.call(`/api/kits/${record.id}`)).body.hasCheckpoint, true);
+
+  const response = await alice.call(`/api/kits/${record.id}/resume`, {
+    method: 'POST',
+    body: JSON.stringify({ fresh: true }),
+  });
+
+  assert.equal(response.status, 202, JSON.stringify(response.body));
+  assert.equal(response.body.resumedFrom, 'the beginning');
+  assert.match(response.body.message, /as asked/);
+
+  // The checkpoint is gone, so an ordinary resume afterwards cannot silently pick up the
+  // one the user just abandoned.
+  await jobs.drain();
+  assert.equal((await store.kits.findById(record.id)).checkpoint, null);
+});
+
+test('fresh must be a boolean — a string is refused, not coerced', async () => {
+  // Coercing would make `fresh: "false"` start a rebuild.
+  const alice = client();
+  await alice.signUp('resume-coerce@example.com');
+
+  const user = await store.users.findByEmail('resume-coerce@example.com');
+  const record = await store.kits.create({
+    userId: user.id,
+    input: { jd: JD, company_url: '', days: 2 },
+    jdHash: 'resume-coerce-hash',
+    status: 'running',
+  });
+
+  const response = await alice.call(`/api/kits/${record.id}/resume`, {
+    method: 'POST',
+    body: JSON.stringify({ fresh: 'false' }),
+  });
+
+  assert.equal(response.status, 400);
+  assert.equal(response.body.error.code, 'VALIDATION_FAILED');
+  assert.equal((await store.kits.findById(record.id)).status, 'running', 'nothing was requeued');
+});
+
+test('the kit read says WHETHER there is a checkpoint, never the checkpoint itself', async () => {
+  const alice = client();
+  await alice.signUp('has-cp@example.com');
+
+  const kitId = await giveKitTo('has-cp@example.com');
+  const before = await alice.call(`/api/kits/${kitId}`);
+  assert.equal(before.body.hasCheckpoint, false);
+  assert.equal(before.body.checkpoint, undefined, 'it holds every expensive output — megabytes');
+
+  await store.kits.write({
+    kitId,
+    set: { checkpoint: { version: 1, kitId: String(kitId), state: {}, input: {} } },
+  });
+
+  const after = await alice.call(`/api/kits/${kitId}`);
+  assert.equal(after.body.hasCheckpoint, true);
+  assert.equal(after.body.checkpoint, undefined);
+});
+
 test('a finished or unstarted kit cannot be resumed', async () => {
   const alice = client();
   await alice.signUp('resume-bad@example.com');

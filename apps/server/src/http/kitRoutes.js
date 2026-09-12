@@ -235,16 +235,37 @@ export function mountKitRoutes(app, { startJob = null, rateLimit = (req, res, ne
         throw new ApiError('GENERATION_UNAVAILABLE', 'No build runner is configured.');
       }
 
-      const resumable = Boolean(kitDoc.checkpoint);
+      /**
+       * `fresh: true` asks for a rebuild from the start, ignoring any checkpoint.
+       *
+       * Without it this endpoint has one behaviour that depends on hidden state — it
+       * resumes when a checkpoint exists and starts over when it does not — so a client
+       * cannot offer "continue" and "start over" as distinct actions, only one button
+       * whose effect it has to explain afterwards. The flag is what makes the two real.
+       *
+       * Boolean or absent. A string "true" is refused rather than coerced, because
+       * silently accepting it would make `fresh: "false"` start a rebuild.
+       */
+      const fresh = request.body?.fresh;
+      if (fresh !== undefined && typeof fresh !== 'boolean') {
+        throw new ApiError('VALIDATION_FAILED', 'fresh must be true or false.');
+      }
+
+      const resumable = Boolean(kitDoc.checkpoint) && fresh !== true;
 
       // Cleared before requeueing, and in the same write that marks it queued. A failed
       // kit that keeps its old error would show the previous failure the whole time the
       // retry is running, which reads as "still broken".
+      //
+      // A fresh run also DROPS the checkpoint. Leaving it would mean the next ordinary
+      // resume picked up a checkpoint the user deliberately abandoned, which is the
+      // opposite of what they asked for.
       await request.store.kits.write({
         kitId,
         set: {
           status: 'queued',
           error: { code: null, message: null, at: null },
+          ...(fresh === true ? { checkpoint: null } : {}),
         },
         push: {
           progress: {
@@ -276,7 +297,9 @@ export function mountKitRoutes(app, { startJob = null, rateLimit = (req, res, ne
         resumedFrom: resumable ? 'checkpoint' : 'the beginning',
         message: resumable
           ? 'Continuing from the last checkpoint. Completed steps will be skipped.'
-          : 'No checkpoint was saved for this kit, so it will build again from the start.',
+          : fresh === true
+            ? 'Starting again from the beginning, as asked. Any saved checkpoint was discarded.'
+            : 'No checkpoint was saved for this kit, so it will build again from the start.',
       });
     })
   );
@@ -348,6 +371,14 @@ export function mountKitRoutes(app, { startJob = null, rateLimit = (req, res, ne
             Boolean(kit.previousSections?.[section]),
           ])
         ),
+
+        // WHETHER there is a checkpoint, never the checkpoint itself — it holds every
+        // expensive intermediate output and would make this response megabytes.
+        //
+        // The client needs the boolean to be honest about its own buttons: offering
+        // "continue from the last checkpoint" when none was saved promises a saving
+        // that does not exist, and the user only finds out after spending the quota.
+        hasCheckpoint: Boolean(kit.checkpoint),
         error: kit.error?.code ? { code: kit.error.code, message: kit.error.message } : null,
         createdAt: kit.createdAt,
         updatedAt: kit.updatedAt,
