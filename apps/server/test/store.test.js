@@ -284,6 +284,56 @@ function contractFor(name, makeStore, { setUp = async () => {}, tearDown = async
         (error) => error.code === 'KIT_NOT_FOUND'
       );
     });
+
+    /**
+     * `index.js` calls this at boot, unconditionally. It was absent from `memoryStore`
+     * entirely and this contract covered it nowhere, so a deployment on that store would
+     * have thrown before finishing startup and nothing would have caught it (CF-066).
+     */
+    test('reclaimStale marks abandoned running kits, and only those', async () => {
+      const user = await store.users.create({ email: 'reclaim@example.com', passwordHash: 'h' });
+
+      const stale = await store.kits.create({ userId: user.id, input: INPUT, jdHash: 'stale' });
+      const fresh = await store.kits.create({ userId: user.id, input: INPUT, jdHash: 'fresh' });
+      const finished = await store.kits.create({ userId: user.id, input: INPUT, jdHash: 'done' });
+
+      await store.kits.write({ kitId: stale.id, set: { status: 'running' } });
+      await store.kits.write({ kitId: fresh.id, set: { status: 'running' } });
+      await store.kits.write({ kitId: finished.id, set: { status: 'ready' } });
+
+      // A window of -1ms makes every existing kit older than the cutoff, which is the
+      // only way to test this without waiting ten minutes or injecting a clock into
+      // Mongo as well.
+      const reclaimed = await store.kits.reclaimStale({ olderThanMs: -1 });
+
+      assert.equal(typeof reclaimed, 'number', 'both stores report a count');
+      assert.ok(reclaimed >= 2, `expected at least the two running kits, got ${reclaimed}`);
+
+      const after = await store.kits.findById(stale.id);
+      assert.equal(after.status, 'failed');
+      assert.equal(after.error.code, 'BUILD_INTERRUPTED', 'one code, shared by both stores');
+      assert.match(after.error.message, /Nothing is wrong with the posting/);
+      assert.ok(after.revision > 0, 'the revision moves, so every client view is stale');
+
+      // A finished kit is not a stale one. Reclaiming it would turn a kit the user
+      // already has into a failure.
+      assert.equal((await store.kits.findById(finished.id)).status, 'ready');
+    });
+
+    test('reclaimStale leaves recently updated running kits alone', async () => {
+      const user = await store.users.create({ email: 'recent@example.com', passwordHash: 'h' });
+      const running = await store.kits.create({ userId: user.id, input: INPUT, jdHash: 'recent' });
+      await store.kits.write({ kitId: running.id, set: { status: 'running' } });
+
+      // A generous window: nothing created during this test can be ten minutes old.
+      await store.kits.reclaimStale();
+
+      assert.equal(
+        (await store.kits.findById(running.id)).status,
+        'running',
+        'a healthy build must not be reclaimed out from under itself'
+      );
+    });
   });
 }
 

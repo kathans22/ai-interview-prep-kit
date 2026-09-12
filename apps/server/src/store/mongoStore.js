@@ -31,7 +31,7 @@
 import mongoose from 'mongoose';
 
 import { User } from '../models/User.js';
-import { Kit } from '../models/Kit.js';
+import { INTERRUPTED_CODE, INTERRUPTED_MESSAGE, Kit, STALE_AFTER_MS } from '../models/Kit.js';
 import { writeWithRevision, writeUnchecked } from '../models/revisions.js';
 
 /** A Mongoose document as the rest of the system expects to see it. */
@@ -194,19 +194,29 @@ export function createMongoStore({ userModel = User, kitModel = Kit, now = () =>
      * The runner is in-process, so a kit left `running` when the process died will stay
      * that way for ever — a spinner nothing will ever finish. Called at boot.
      */
-    async reclaimStale({ olderThanMs = 15 * 60 * 1000 } = {}) {
+    /**
+     * Mark kits abandoned by a process that died, so nobody watches a spinner that will
+     * never resolve and the idempotency window stops treating them as in-flight.
+     *
+     * ONE `updateMany`, deliberately. A read-then-write-per-kit sweep runs at exactly
+     * the moment another instance may be doing the same thing, and this is a single
+     * atomic statement instead.
+     *
+     * The code is `BUILD_INTERRUPTED`, matching the `BUILD_*` family every other build
+     * failure uses (`BUILD_FAILED`, `BUILD_NO_REQUIREMENTS`, `BUILD_INVALID_KIT`). It
+     * used to be a lone `INTERRUPTED` while a second, unreachable implementation in the
+     * job runner wrote `BUILD_INTERRUPTED` — the disagreement that made a client match
+     * the wrong one (BUG-035, CF-066). Rows written before this change still carry the
+     * old code, so the client accepts both.
+     */
+    async reclaimStale({ olderThanMs = STALE_AFTER_MS } = {}) {
       const cutoff = new Date(now().getTime() - olderThanMs);
       const result = await kitModel.updateMany(
         { status: 'running', updatedAt: { $lt: cutoff } },
         {
           $set: {
             status: 'failed',
-            error: {
-              code: 'INTERRUPTED',
-              message:
-                'The server restarted while this kit was being built. Nothing was lost except the run itself — submit it again.',
-              at: now(),
-            },
+            error: { code: INTERRUPTED_CODE, message: INTERRUPTED_MESSAGE, at: now() },
             updatedAt: now(),
           },
           $inc: { revision: 1 },

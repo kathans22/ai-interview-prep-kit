@@ -16,7 +16,7 @@
  *
  *   What it costs, honestly: a restart loses in-flight jobs. A kit left `running` when
  *   the process died stays `running` forever unless something reclaims it — which is
- *   exactly why `reclaimStale` exists and is called at boot. And with more than one
+ *   exactly why `store.kits.reclaimStale()` exists and is called at boot. And with more than one
  *   server process, each has its own queue, so concurrency limits are per-process. For
  *   a single-instance deploy that is correct; for a scaled one it would need a real
  *   broker, and pretending otherwise would be the dishonest option.
@@ -36,8 +36,9 @@ import { buildKit } from '@aipk/core/orchestrator/buildKit.js';
 
 import { KIT_STATUS } from '../models/Kit.js';
 
-/** How long a `running` kit may go without an update before it is presumed dead. */
-export const STALE_AFTER_MS = 10 * 60 * 1000;
+// `STALE_AFTER_MS` used to live here, beside a reclaim that could not run. Both the
+// window and the error code now live in `models/Kit.js`, which is where the two stores
+// that actually implement the reclaim can share them.
 
 /**
  * Create a job runner.
@@ -197,47 +198,25 @@ export function createJobRunner({ store, concurrency = 2, build = buildKit, log 
   }
 
   /**
-   * Mark kits abandoned by a previous process.
+   * RECLAIMING STALE KITS IS THE STORE'S JOB, NOT THIS MODULE'S.
    *
-   * Called once at boot. Without it, a kit that was `running` when the process died
-   * stays `running` forever: the UI shows a spinner that never resolves, and the
-   * idempotency window treats it as in-flight so a retry is refused. A stale kit is
-   * marked failed with a code that tells the user to retry, which is true and
-   * actionable.
+   * There used to be a second `reclaimStale` here. It was never reachable: nothing
+   * called it, and it depended on a `store.kits.findStaleRunning` that neither store
+   * implemented, so it would have returned zero even if something had. It also wrote a
+   * different error code from the one the live path writes, which is how a client came
+   * to match the wrong one (BUG-035).
+   *
+   * `store.kits.reclaimStale()` is the real implementation and `index.js` calls it at
+   * boot. It belongs there for a reason beyond tidiness: on MongoDB it is a single
+   * `updateMany`, so the whole sweep is one atomic statement rather than a read followed
+   * by a write per kit — which is what you want when a process has just restarted and
+   * another instance may be doing the same thing.
    */
-  async function reclaimStale({ olderThanMs = STALE_AFTER_MS } = {}) {
-    if (typeof store.kits.findStaleRunning !== 'function') return { reclaimed: 0 };
-
-    const stale = await store.kits.findStaleRunning({ before: new Date(Date.now() - olderThanMs) });
-    let reclaimed = 0;
-
-    for (const kit of stale) {
-      const kitId = String(kit.id ?? kit._id);
-      if (running.has(kitId)) continue;
-
-      await store.kits
-        .write({
-          kitId,
-          set: {
-            status: KIT_STATUS.FAILED,
-            'error.code': 'BUILD_INTERRUPTED',
-            'error.message': 'The server restarted while this kit was being built. Start it again.',
-            'error.at': new Date(),
-          },
-        })
-        .catch(() => {});
-      reclaimed += 1;
-    }
-
-    if (reclaimed > 0) log('[job] reclaimed', reclaimed, 'interrupted kit(s)');
-    return { reclaimed };
-  }
 
   return {
     start,
     subscribe,
     drain,
-    reclaimStale,
     isRunning: (kitId) => running.has(kitId),
     stats: () => ({ running: running.size, queued: queue.length, concurrency }),
   };

@@ -30,6 +30,35 @@ export const KIT_STATUS = Object.freeze({
 });
 
 /**
+ * How long a `running` kit may go without an update before it is presumed abandoned.
+ *
+ * Must exceed the longest a HEALTHY build can go between progress writes, or a slow
+ * crawl gets reclaimed out from under itself. Ten minutes against a 150-second per-case
+ * governor leaves a wide margin.
+ */
+export const STALE_AFTER_MS = 10 * 60 * 1000;
+
+/**
+ * What a kit abandoned by a dead process is marked with.
+ *
+ * Defined here, once, because BOTH stores implement the reclaim and they must write the
+ * same thing. They did not: the store wrote `INTERRUPTED` while a second, unreachable
+ * implementation in the job runner wrote `BUILD_INTERRUPTED`, and a client matched the
+ * one that could never happen (BUG-035, CF-066).
+ *
+ * `BUILD_INTERRUPTED` is the survivor because it matches the family every other build
+ * failure uses — `BUILD_FAILED`, `BUILD_NO_REQUIREMENTS`, `BUILD_INVALID_KIT`. Rows
+ * written before the change still carry the bare `INTERRUPTED`, so readers accept both.
+ */
+export const INTERRUPTED_CODE = 'BUILD_INTERRUPTED';
+
+/** The legacy code, still present on rows written before the codes were unified. */
+export const LEGACY_INTERRUPTED_CODE = 'INTERRUPTED';
+
+export const INTERRUPTED_MESSAGE =
+  'The server restarted while this kit was being built. Nothing is wrong with the posting — start it again.';
+
+/**
  * A progress event, stored as it was emitted.
  *
  * `detail` is Mixed because each step reports different things — page counts, skip

@@ -21,6 +21,7 @@
  */
 
 import { StaleRevisionError } from '../models/revisions.js';
+import { INTERRUPTED_CODE, INTERRUPTED_MESSAGE, STALE_AFTER_MS } from '../models/Kit.js';
 
 let counter = 0;
 const nextId = (prefix) => `${prefix}_${(counter += 1).toString(36)}${Date.now().toString(36)}`;
@@ -143,6 +144,48 @@ export function createMemoryStore({ now = () => new Date() } = {}) {
       if (!kit || kit.userId !== String(userId)) return false;
       kits.delete(String(kitId));
       return true;
+    },
+
+    /**
+     * Mark kits abandoned by a process that died.
+     *
+     * THIS METHOD WAS MISSING, and `index.js` calls it unconditionally at boot — so any
+     * deployment on this store would have thrown before it finished starting, and the
+     * store contract test never noticed because it did not cover the reclaim at all
+     * (CF-066). That is precisely the divergence this store exists to prevent: it
+     * DEFINES the interface the Mongo-backed one implements, so a method absent here is
+     * a method the interface does not have.
+     *
+     * Returns a COUNT, matching `mongoStore`. The Mongo version does this as a single
+     * `updateMany`; a Map cannot be atomic in the same way, but nothing else runs while
+     * this loop does, so the effect is the same.
+     */
+    async reclaimStale({ olderThanMs = STALE_AFTER_MS } = {}) {
+      const cutoff = now().getTime() - olderThanMs;
+      let reclaimed = 0;
+
+      for (const kit of kits.values()) {
+        if (kit.status !== 'running') continue;
+        // A kit with no timestamp cannot be shown to be stale, so it is left alone.
+        const updatedAt = kit.updatedAt ? new Date(kit.updatedAt).getTime() : null;
+        if (updatedAt === null || updatedAt >= cutoff) continue;
+
+        // Written as a whole object rather than through dotted paths, because that is
+        // what `mongoStore` does — and `setPath` refuses to write through a null, the
+        // same way MongoDB does (BUG-024).
+        applyWrite(
+          kit,
+          {
+            status: 'failed',
+            error: { code: INTERRUPTED_CODE, message: INTERRUPTED_MESSAGE, at: now() },
+          },
+          null,
+          now
+        );
+        reclaimed += 1;
+      }
+
+      return reclaimed;
     },
   };
 
