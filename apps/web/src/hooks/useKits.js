@@ -82,6 +82,29 @@ export function useCreateBatch() {
   return { ...rest, submit: run };
 }
 
+/**
+ * Continue an interrupted or failed kit.
+ *
+ * The one server mechanism for both continuing and retrying: it resumes from a
+ * checkpoint when there is one and starts over when there is not, and the response says
+ * which. The caller reports that rather than guessing, because the two cost very
+ * different fractions of a day's model quota.
+ */
+export function useResumeKit() {
+  const task = useCallback((signal, id) => kits.resume(id), []);
+  const { run, ...rest } = useAsync(task, { immediate: false });
+
+  return { ...rest, resume: run };
+}
+
+/** Delete a kit. Not immediate — a destructive action waits to be asked for. */
+export function useDeleteKit() {
+  const task = useCallback((signal, id) => kits.remove(id), []);
+  const { run, ...rest } = useAsync(task, { immediate: false });
+
+  return { ...rest, remove: run };
+}
+
 /** This kit's practice history, weakest question first. */
 export function usePracticeHistory(id) {
   const task = useCallback((signal) => practice.history(id, signal), [id]);

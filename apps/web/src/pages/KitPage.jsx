@@ -20,13 +20,16 @@
  */
 
 import { useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 
+import Button, { buttonClasses } from '../ui/Button.jsx';
 import Card from '../ui/Card.jsx';
 import SectionState from '../ui/SectionState.jsx';
-import { useKit } from '../hooks/useKits.js';
+import { useToast } from '../ui/ToastProvider.jsx';
+import { useKit, useResumeKit } from '../hooks/useKits.js';
 import { STREAM_STATES, describeConnection, useProgress } from '../hooks/useProgress.js';
 import ProgressSteps from '../kits/ProgressSteps.jsx';
+import { describeKit, describeResume } from '../kits/kitStatus.js';
 import { deriveSteps, summarise } from '../kits/steps.js';
 
 const FINISHED = new Set(['ready', 'failed']);
@@ -66,6 +69,24 @@ export default function KitPage() {
   const liveStatus = FINISHED.has(status) ? status : (stream.status ?? status);
   const steps = deriveSteps(stream.progress);
   const connectionNotice = describeConnection(stream.connection);
+  const described = describeKit({ status: liveStatus, error: buildError });
+
+  const { resume, isLoading: resuming } = useResumeKit();
+  const { show } = useToast();
+
+  async function handleResume() {
+    const response = await resume(id).catch((thrown) => {
+      show(thrown.message, { tone: 'error' });
+      return null;
+    });
+    if (!response) return;
+
+    show(describeResume(response), { tone: 'info' });
+    // The kit is queued again, so this page must forget that it already refreshed for
+    // the previous run — otherwise the new build's completion would never be picked up.
+    refreshed.current = null;
+    reload().catch(() => {});
+  }
 
   return (
     <section>
@@ -106,12 +127,37 @@ export default function KitPage() {
             <ProgressSteps steps={steps} busy={!FINISHED.has(liveStatus)} />
           </Card>
 
-          {/* The build's own failure, distinct from a request failure. The actions that
-              belong beside it arrive with the kit list unit. */}
-          {liveStatus === 'failed' && buildError ? (
-            <Card title="This kit could not be built" titleAs="h2">
-              <p className="text-sm text-slate-700">{buildError.message}</p>
-              <p className="mt-2 font-mono text-xs text-slate-500">{buildError.code}</p>
+          {/* The build's own failure, distinct from a request failure — and never a dead
+              end. An interrupted build and a genuinely failed one get different words
+              because they mean different things to the person reading them. */}
+          {liveStatus === 'failed' ? (
+            <Card title={described.view === 'interrupted' ? 'This build was interrupted' : 'This kit could not be built'} titleAs="h2">
+              <p className="text-sm text-slate-700">{described.detail}</p>
+
+              {/* The code stays visible in small print: it is what makes a support
+                  conversation possible, and the sentence above is what a person acts on. */}
+              {buildError?.code ? <p className="mt-2 font-mono text-xs text-slate-500">{buildError.code}</p> : null}
+
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                <Button onClick={handleResume} disabled={resuming}>
+                  {resuming ? 'Starting…' : described.primary.label}
+                </Button>
+
+                {/* The honest second option. The server has ONE continue mechanism — it
+                    resumes from a checkpoint if there is one and starts over if not — and
+                    this page cannot rebuild the original submission because the API
+                    returns the description's length, not its text. So rather than a
+                    second button that secretly does the same thing, this is a link to
+                    start a fresh kit, which is what "retry from scratch" honestly is. */}
+                <Link to="/kits/new" className={buttonClasses({ variant: 'secondary' })}>
+                  Start a new kit instead
+                </Link>
+              </div>
+
+              <p className="mt-3 text-xs text-slate-500">
+                Continuing picks up from the last checkpoint when one was saved, and starts from the
+                beginning when none was. It says which before it spends anything.
+              </p>
             </Card>
           ) : null}
 
