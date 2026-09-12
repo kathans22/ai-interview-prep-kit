@@ -23,6 +23,7 @@ import {
   STEP_LABELS,
   STEP_ORDER,
   STEP_STATES,
+  announce,
   deriveSteps,
   describeEntry,
   humaniseCode,
@@ -221,6 +222,47 @@ test('no translation leaks a code — every mapped sentence is prose', () => {
     assert.doesNotMatch(words, /_/, `${code} still contains an underscore`);
     assert.doesNotMatch(words, /\b[A-Z]{3,}\b/, `${code} still contains a shouted code`);
     assert.match(words, /[.!]$/, `${code} is not a sentence`);
+  }
+});
+
+// --- what gets announced ----------------------------------------------------
+
+test('each row is announced as a whole sentence naming the step', () => {
+  // A live region announces what CHANGED. If the row's only changing text were the
+  // state word, the announcement would be "running" with nothing saying which step.
+  const steps = deriveSteps([{ step: 'crawl', status: 'started', at: at(1) }]);
+  assert.equal(announce(find(steps, 'crawl')), 'Crawling the company site: running.');
+});
+
+test('a waiting step announces as waiting rather than as nothing', () => {
+  assert.equal(announce(find(deriveSteps([]), 'requirements')), 'Extracting requirements: waiting.');
+});
+
+test('a partial step says so before it says why', () => {
+  const steps = deriveSteps([{ step: 'hiring-page', status: 'degraded', detail: { reason: 'NO_HIRING_PAGE_FOUND' }, at: at(1) }]);
+
+  assert.equal(
+    announce(find(steps, 'hiring-page')),
+    'Finding the hiring page: done. Partial result. No hiring page found on this site.'
+  );
+});
+
+test('a failed step announces the failure in words', () => {
+  const steps = deriveSteps([{ step: 'questions', status: 'failed', detail: { code: 'LLM_RATE_LIMITED' }, at: at(1) }]);
+  assert.equal(announce(find(steps, 'questions')), 'Generating questions: failed. The model hit its rate limit.');
+});
+
+test('nothing announced contains a code', () => {
+  const steps = deriveSteps([
+    { step: 'flashcards', status: 'skipped', detail: { reason: 'TIME_GOVERNOR' }, at: at(1) },
+    { step: 'company-brief', status: 'degraded', detail: { reason: 'NO_PAGES_RETRIEVED' }, at: at(2) },
+    { step: 'role-profile', status: 'failed', detail: { code: 'LLM_UNAVAILABLE' }, at: at(3) },
+  ]);
+
+  for (const step of steps) {
+    const spoken = announce(step);
+    assert.doesNotMatch(spoken, /_/, spoken);
+    assert.doesNotMatch(spoken, /\b[A-Z]{3,}\b/, spoken);
   }
 });
 

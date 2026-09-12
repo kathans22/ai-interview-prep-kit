@@ -86,7 +86,7 @@ export default function KitPage() {
       >
         <div className="mt-6 space-y-6">
           <Card title={summarise(steps, liveStatus)} titleAs="h2">
-            <ProgressSteps steps={steps} />
+            <ProgressSteps steps={steps} busy={!FINISHED.has(liveStatus)} />
           </Card>
 
           {/* The build's own failure, distinct from a request failure. The actions that

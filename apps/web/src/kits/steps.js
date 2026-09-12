@@ -295,6 +295,44 @@ export function deriveSteps(progress = []) {
   });
 }
 
+/** How each state is said aloud. Separate from the visual word only where it needs to be. */
+const SPOKEN_STATE = Object.freeze({
+  [STEP_STATES.pending]: 'waiting',
+  [STEP_STATES.running]: 'running',
+  [STEP_STATES.done]: 'done',
+  [STEP_STATES.skipped]: 'skipped',
+  [STEP_STATES.failed]: 'failed',
+});
+
+/**
+ * One row as a complete spoken sentence.
+ *
+ * WHY A WHOLE SENTENCE RATHER THAN THE VISIBLE PARTS. The step list is a polite live
+ * region, so a screen reader announces the nodes that CHANGED. When a row moves from
+ * waiting to running the only changed text is the state word, and the announcement is
+ * therefore "running" — with nothing saying which of fourteen steps is running, which is
+ * worse than silence because the user now has to go and look.
+ *
+ * Giving each row a single sentence means the whole sentence is what changes, so the
+ * announcement is "Crawling the company site: running." The visual row is marked
+ * `aria-hidden` so the same information is not read twice in different shapes.
+ *
+ * The note is included because it is the substance: "Finding the hiring page: done.
+ * Partial result. No hiring page found on this site." is the entire point of the row,
+ * and a sighted reader gets it from the line underneath.
+ */
+export function announce(step) {
+  const state = SPOKEN_STATE[step.state] ?? SPOKEN_STATE[STEP_STATES.pending];
+
+  const parts = [`${step.label}: ${state}.`];
+
+  // Said before the reason, because "partial" is the fact and the reason is the detail.
+  if (step.partial && step.state === STEP_STATES.done) parts.push('Partial result.');
+  if (step.note) parts.push(step.note);
+
+  return parts.join(' ');
+}
+
 /** A one-line summary of where the build is, for the region that announces it. */
 export function summarise(steps, kitStatus) {
   const done = steps.filter((step) => step.state === STEP_STATES.done).length;
