@@ -26,6 +26,7 @@ import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 
 import Button from '../ui/Button.jsx';
 import ErrorState from '../ui/ErrorState.jsx';
+import { useToast } from '../ui/ToastProvider.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 
 /** Nav links are only useful to someone who has kits, so they follow the session. */
@@ -37,10 +38,15 @@ const NAV = [
 export default function Layout() {
   const { user, loading, logout, bootstrapError } = useAuth();
   const navigate = useNavigate();
+  const { show } = useToast();
 
   async function handleSignOut() {
     await logout();
     navigate('/login', { replace: true });
+    // A toast is right here precisely because there is nothing to decide: the header
+    // changed and the page moved, and this confirms that was deliberate rather than
+    // something going wrong. Announced, not just drawn — see ToastProvider.
+    show('You are signed out.', { tone: 'success' });
   }
 
   return (
