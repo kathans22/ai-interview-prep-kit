@@ -18,6 +18,7 @@
 import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 
 import CredentialsForm from '../auth/CredentialsForm.jsx';
+import Spinner from '../ui/Spinner.jsx';
 import { useAuth } from '../auth/AuthContext.jsx';
 
 export default function LoginPage() {
@@ -30,13 +31,7 @@ export default function LoginPage() {
   const from = location.state?.from;
   const target = from ? `${from.pathname}${from.search ?? ''}${from.hash ?? ''}` : '/kits';
 
-  if (loading) {
-    return (
-      <p role="status" className="text-sm text-slate-600">
-        Checking your session…
-      </p>
-    );
-  }
+  if (loading) return <Spinner label="Checking your session…" />;
 
   if (user) return <Navigate to={target} replace />;
 

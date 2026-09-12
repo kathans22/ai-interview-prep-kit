@@ -15,10 +15,16 @@
  * The catch-all is deliberately NOT protected. A mistyped URL is not an authentication
  * problem, and guarding it would tell a signed-out visitor their typo was a permissions
  * failure.
+ *
+ * Every route sits inside one LAYOUT ROUTE, so the chrome comes from being routed rather
+ * than from each page remembering to wrap itself. The sign-in screens are inside it too:
+ * a signed-out visitor still needs the header, and a bare form on a white page looks
+ * like a different application.
  */
 
 import { Navigate, Route, Routes } from 'react-router-dom';
 
+import Layout from './layout/Layout.jsx';
 import ProtectedRoute from './auth/ProtectedRoute.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import RegisterPage from './pages/RegisterPage.jsx';
@@ -31,48 +37,50 @@ import NotFoundPage from './pages/NotFoundPage.jsx';
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<Navigate to="/kits" replace />} />
+      <Route element={<Layout />}>
+        <Route path="/" element={<Navigate to="/kits" replace />} />
 
-      {/* Public: the two screens a visitor with no account must be able to reach. */}
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/register" element={<RegisterPage />} />
+        {/* Public: the two screens a visitor with no account must be able to reach. */}
+        <Route path="/login" element={<LoginPage />} />
+        <Route path="/register" element={<RegisterPage />} />
 
-      {/* Behind an account. The server enforces ownership as well — this only saves a
-          pointless screen, it is not the security boundary. */}
-      <Route
-        path="/kits"
-        element={
-          <ProtectedRoute>
-            <KitsPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/kits/new"
-        element={
-          <ProtectedRoute>
-            <NewKitPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/kits/:id"
-        element={
-          <ProtectedRoute>
-            <KitPage />
-          </ProtectedRoute>
-        }
-      />
-      <Route
-        path="/kits/:id/practice"
-        element={
-          <ProtectedRoute>
-            <PracticePage />
-          </ProtectedRoute>
-        }
-      />
+        {/* Behind an account. The server enforces ownership as well — this only saves a
+            pointless screen, it is not the security boundary. */}
+        <Route
+          path="/kits"
+          element={
+            <ProtectedRoute>
+              <KitsPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/kits/new"
+          element={
+            <ProtectedRoute>
+              <NewKitPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/kits/:id"
+          element={
+            <ProtectedRoute>
+              <KitPage />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/kits/:id/practice"
+          element={
+            <ProtectedRoute>
+              <PracticePage />
+            </ProtectedRoute>
+          }
+        />
 
-      <Route path="*" element={<NotFoundPage />} />
+        <Route path="*" element={<NotFoundPage />} />
+      </Route>
     </Routes>
   );
 }

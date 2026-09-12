@@ -24,6 +24,7 @@
 
 import { Navigate, useLocation } from 'react-router-dom';
 
+import Spinner from '../ui/Spinner.jsx';
 import { useAuth } from './AuthContext.jsx';
 
 export default function ProtectedRoute({ children }) {
@@ -31,11 +32,7 @@ export default function ProtectedRoute({ children }) {
   const location = useLocation();
 
   if (loading) {
-    return (
-      <p role="status" className="text-sm text-slate-600">
-        Checking your session…
-      </p>
-    );
+    return <Spinner label="Checking your session…" />;
   }
 
   if (!user) {

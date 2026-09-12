@@ -1,8 +1,8 @@
 /**
  * CredentialsForm.jsx — the email-and-password form, shared by sign-in and register.
  *
- * Decides: the markup and the in-flight state of the form, and that the submit button is
- * disabled while a request is out.
+ * Decides: the fields, the in-flight state, and that the submit button is disabled while
+ * a request is out.
  *
  * Does NOT decide: what happens on submit, or what a valid credential is. The caller
  * passes `onSubmit`; the server owns the rules and returns them as a coded error with a
@@ -11,23 +11,24 @@
  *
  * WHY THE TWO SCREENS SHARE THIS. Sign-in and register differ in one function call and
  * two strings. Two copies of a form drift: a `<label>` gets fixed on one and not the
- * other, and the accessibility work is silently half-done.
+ * other, and the accessibility work ends up silently half-done.
  *
- * ACCESSIBILITY IS STRUCTURAL HERE, NOT STYLING. Real `<label htmlFor>` rather than
- * placeholder text, because a placeholder disappears the moment someone types and is not
- * announced as a name. `autoComplete` tokens so a password manager can fill the form.
- * The error is `role="alert"` and tied to the fieldset with `aria-describedby`, so it is
- * announced when it appears rather than sitting silently above a button that "did
- * nothing". Focus rings are added in the styling unit, but nothing here may remove them.
+ * The fields and the button are the shared primitives, so the label wiring, the
+ * `aria-invalid` handling and the focus treatment are the same here as everywhere else
+ * rather than this form's own private version of them.
  */
 
-import { useId, useState } from 'react';
+import { useState } from 'react';
 
-export default function CredentialsForm({ submitLabel, pendingLabel, onSubmit, autoCompleteMode = 'current-password' }) {
-  const emailId = useId();
-  const passwordId = useId();
-  const errorId = useId();
+import Button from '../ui/Button.jsx';
+import Input from '../ui/Input.jsx';
 
+export default function CredentialsForm({
+  submitLabel,
+  pendingLabel,
+  onSubmit,
+  autoCompleteMode = 'current-password',
+}) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [pending, setPending] = useState(false);
@@ -53,53 +54,34 @@ export default function CredentialsForm({ submitLabel, pendingLabel, onSubmit, a
 
   return (
     <form onSubmit={handleSubmit} noValidate className="mt-6 max-w-sm space-y-4">
-      <div>
-        <label htmlFor={emailId} className="block text-sm font-medium text-slate-900">
-          Email
-        </label>
-        <input
-          id={emailId}
-          name="email"
-          type="email"
-          required
-          autoComplete="email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          aria-describedby={error ? errorId : undefined}
-          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900"
-        />
-      </div>
+      <Input
+        label="Email"
+        name="email"
+        type="email"
+        required
+        autoComplete="email"
+        value={email}
+        onChange={(event) => setEmail(event.target.value)}
+      />
 
-      <div>
-        <label htmlFor={passwordId} className="block text-sm font-medium text-slate-900">
-          Password
-        </label>
-        <input
-          id={passwordId}
-          name="password"
-          type="password"
-          required
-          autoComplete={autoCompleteMode}
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          aria-describedby={error ? errorId : undefined}
-          className="mt-1 block w-full rounded-md border border-slate-300 px-3 py-2 text-sm text-slate-900"
-        />
-      </div>
+      <Input
+        label="Password"
+        name="password"
+        type="password"
+        required
+        autoComplete={autoCompleteMode}
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        // The error is attached to the password field rather than shown loose, so it is
+        // announced with the input a person is most likely to correct. The server
+        // returns one message for a wrong password and an unknown email on purpose —
+        // two different messages would be a free account-enumeration endpoint.
+        error={error ? error.message : undefined}
+      />
 
-      {error ? (
-        <p id={errorId} role="alert" className="text-sm text-red-700">
-          {error.message}
-        </p>
-      ) : null}
-
-      <button
-        type="submit"
-        disabled={pending}
-        className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-60"
-      >
+      <Button type="submit" disabled={pending}>
         {pending ? pendingLabel : submitLabel}
-      </button>
+      </Button>
     </form>
   );
 }
