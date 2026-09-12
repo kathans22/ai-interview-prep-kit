@@ -117,6 +117,41 @@ test('auth failures are recognisable by predicate, not by reading the message', 
   assert.ok(!isStaleRevision(error));
 });
 
+test('a proxy 502 with no coded body is reported as unreachable, with something to do about it', async () => {
+  // What a dev-server proxy actually returns when the API is not running: an HTML body
+  // and a gateway status. The old behaviour put "The server returned 502." on screen.
+  stubFetch({ status: 502, text: '<html><body>Bad Gateway</body></html>' });
+
+  const error = await auth.login('a@b.com', 'password123').catch((thrown) => thrown);
+
+  assert.equal(error.code, CLIENT_ERROR_CODES.SERVER_UNREACHABLE);
+  assert.equal(error.status, 502);
+  assert.match(error.message, /not responding/);
+  assert.doesNotMatch(error.message, /502/, 'a status number is not an instruction');
+  assert.ok(isRetryable(error));
+});
+
+test('our own coded 503 keeps its code — the gateway branch must not swallow it', async () => {
+  stubFetch({
+    status: 503,
+    body: { error: { code: 'LLM_RATE_LIMITED', message: 'The model is rate limited. Try again shortly.' } },
+  });
+
+  const error = await request('/api/kits').catch((thrown) => thrown);
+
+  assert.equal(error.code, 'LLM_RATE_LIMITED');
+  assert.match(error.message, /rate limited/);
+});
+
+test('any other uncoded failure keeps the status, which is all that is known', async () => {
+  stubFetch({ status: 418, text: 'nope' });
+
+  const error = await request('/api/kits').catch((thrown) => thrown);
+
+  assert.equal(error.code, 'INTERNAL_ERROR');
+  assert.match(error.message, /418/);
+});
+
 // --- the revision ledger ----------------------------------------------------
 
 test('the ledger keeps the newest revision and ignores a late, older response', () => {

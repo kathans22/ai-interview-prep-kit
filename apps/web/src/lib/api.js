@@ -123,8 +123,14 @@ async function readJson(response) {
 function toAppError(response, payload) {
   const error = payload?.error ?? {};
 
+  // No coded body at all. Something answered, but it was not this API — a proxy with
+  // nothing behind it, or a gateway timing out. Falling through to the generic branch
+  // would put "The server returned 502." in front of a person, which is accurate and
+  // impossible to act on; this says what to do instead.
+  if (typeof error.code !== 'string') return uncodedFailure(response);
+
   const appError = new AppError({
-    code: typeof error.code === 'string' ? error.code : 'INTERNAL_ERROR',
+    code: error.code,
     message:
       typeof error.message === 'string' && error.message !== ''
         ? error.message
@@ -143,6 +149,37 @@ function toAppError(response, payload) {
 
   return appError;
 }
+
+/**
+ * A failure that carried no coded body.
+ *
+ * The gateway statuses are the ones a reverse proxy or a dev-server proxy produces when
+ * nothing is listening behind it, and they are the realistic case in development: the
+ * API is simply not running. They get their own code so a screen can offer "try again"
+ * rather than reporting an internal fault the server never claimed.
+ *
+ * Anything else uncoded keeps the status in the message, because at that point the
+ * status is genuinely all that is known and inventing a friendlier sentence would hide
+ * the one fact available.
+ */
+function uncodedFailure(response) {
+  if (GATEWAY_STATUSES.has(response.status)) {
+    return new AppError({
+      code: CLIENT_ERROR_CODES.SERVER_UNREACHABLE,
+      message: 'The server is not responding. It may be starting up — try again in a moment.',
+      status: response.status,
+    });
+  }
+
+  return new AppError({
+    code: 'INTERNAL_ERROR',
+    message: `The server returned ${response.status} with no explanation.`,
+    status: response.status,
+  });
+}
+
+/** Statuses that mean "nothing was listening behind the proxy", not "the API failed". */
+const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
 /** Record every revision a payload carries, whatever shape it arrived in. */
 function recordRevisions(payload) {

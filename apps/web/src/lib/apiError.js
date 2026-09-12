@@ -26,6 +26,11 @@
  *   - REVISION_UNKNOWN — a write was attempted on a kit this client has never read, so
  *     there is no revision to send. Raised before the request leaves, because the
  *     server would reject it anyway and a coded local failure says why.
+ *   - SERVER_UNREACHABLE — a response arrived, but from something in front of the API
+ *     rather than the API itself: a 502/503/504 with no coded body, which is what a
+ *     proxy returns when nothing is listening behind it. Distinct from
+ *     NETWORK_UNAVAILABLE, where no response arrived at all, and distinct from a real
+ *     503 from our own server — that one carries a code and keeps it.
  */
 
 /** Codes the client raises itself, for failures that arrive with no coded body. */
@@ -34,6 +39,7 @@ export const CLIENT_ERROR_CODES = Object.freeze({
   UNEXPECTED_RESPONSE: 'UNEXPECTED_RESPONSE',
   REQUEST_CANCELLED: 'REQUEST_CANCELLED',
   REVISION_UNKNOWN: 'REVISION_UNKNOWN',
+  SERVER_UNREACHABLE: 'SERVER_UNREACHABLE',
 });
 
 export class AppError extends Error {
@@ -92,5 +98,6 @@ export function isCancelled(error) {
 /** Is retrying the same request plausibly useful? */
 export function isRetryable(error) {
   if (error?.code === CLIENT_ERROR_CODES.NETWORK_UNAVAILABLE) return true;
+  if (error?.code === CLIENT_ERROR_CODES.SERVER_UNREACHABLE) return true;
   return typeof error?.status === 'number' && error.status >= 500;
 }
