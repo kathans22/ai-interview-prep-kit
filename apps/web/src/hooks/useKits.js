@@ -68,6 +68,20 @@ export function useCreateKit() {
   return { ...rest, create: run };
 }
 
+/**
+ * Submit several postings at once.
+ *
+ * Every case comes back with an answer, including the ones that did not start — a
+ * response listing only new kits would leave the caller to work out which of its cases
+ * are missing and why. `accepted` and `duplicates` separate the two.
+ */
+export function useCreateBatch() {
+  const task = useCallback((signal, cases) => kits.batch(cases), []);
+  const { run, ...rest } = useAsync(task, { immediate: false });
+
+  return { ...rest, submit: run };
+}
+
 /** This kit's practice history, weakest question first. */
 export function usePracticeHistory(id) {
   const task = useCallback((signal) => practice.history(id, signal), [id]);

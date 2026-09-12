@@ -1,7 +1,8 @@
 /**
- * NewKitPage.jsx — start a kit from one posting.
+ * NewKitPage.jsx — start one kit, or several.
  *
- * Decides: the form, and where a successful submission goes next.
+ * Decides: the two ways in (one posting, or a file of them) and where a successful
+ * submission goes next.
  *
  * Does NOT decide: what a valid posting is (that is `validation.js`, mirroring the
  * server, which remains the authority) or how a kit is built. Creation answers 202 with
@@ -32,11 +33,37 @@ import { useNavigate } from 'react-router-dom';
 import Button from '../ui/Button.jsx';
 import Input from '../ui/Input.jsx';
 import ErrorState from '../ui/ErrorState.jsx';
+import Tabs from '../ui/Tabs.jsx';
 import { useToast } from '../ui/ToastProvider.jsx';
 import { useCreateKit } from '../hooks/useKits.js';
 import { LIMITS, checkKitInput } from '../lib/validation.js';
+import BatchUpload from '../kits/BatchUpload.jsx';
 
 export default function NewKitPage() {
+  const [tab, setTab] = useState('one');
+
+  return (
+    <section>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">New kit</h1>
+      <p className="mt-2 max-w-prose text-sm text-slate-600">
+        Paste a job description, or upload a file of them. The company website is optional
+        throughout — without it a kit is built from the posting alone and says so.
+      </p>
+
+      <Tabs
+        className="mt-6"
+        active={tab}
+        onChange={setTab}
+        tabs={[
+          { id: 'one', label: 'One role', panel: <SingleKitForm /> },
+          { id: 'many', label: 'Several roles', panel: <BatchUpload /> },
+        ]}
+      />
+    </section>
+  );
+}
+
+function SingleKitForm() {
   const navigate = useNavigate();
   const { show } = useToast();
   const { create, isLoading, error } = useCreateKit();
@@ -70,70 +97,62 @@ export default function NewKitPage() {
   const jdLength = jd.trim().length;
 
   return (
-    <section>
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">New kit</h1>
-      <p className="mt-2 max-w-prose text-sm text-slate-600">
-        Paste the job description and, if you have it, the company&apos;s website. The company site is
-        optional — without it the kit is built from the posting alone and says so.
-      </p>
+    <form onSubmit={handleSubmit} noValidate className="max-w-2xl space-y-5">
+      <Input
+        label="Job description"
+        textarea
+        required
+        value={jd}
+        onChange={(event) => setJd(event.target.value)}
+        onBlur={() => touch('jd')}
+        hint={`${jdLength.toLocaleString()} characters — ${LIMITS.jdMin} minimum. Paste the posting as it appears; wording is a signal the extraction reads.`}
+        error={touched.jd && !check.fields.jd.valid ? check.fields.jd.reason : undefined}
+      />
 
-      <form onSubmit={handleSubmit} noValidate className="mt-6 max-w-2xl space-y-5">
-        <Input
-          label="Job description"
-          textarea
-          required
-          value={jd}
-          onChange={(event) => setJd(event.target.value)}
-          onBlur={() => touch('jd')}
-          hint={`${jdLength.toLocaleString()} characters — ${LIMITS.jdMin} minimum. Paste the posting as it appears; wording is a signal the extraction reads.`}
-          error={touched.jd && !check.fields.jd.valid ? check.fields.jd.reason : undefined}
-        />
+      <Input
+        label="Company website"
+        type="url"
+        inputMode="url"
+        placeholder="https://example.com"
+        value={companyUrl}
+        onChange={(event) => setCompanyUrl(event.target.value)}
+        onBlur={() => touch('companyUrl')}
+        hint="Optional. The crawler finds the careers or hiring page itself — no need to link it directly."
+        error={touched.companyUrl && !check.fields.companyUrl.valid ? check.fields.companyUrl.reason : undefined}
+      />
 
-        <Input
-          label="Company website"
-          type="url"
-          inputMode="url"
-          placeholder="https://example.com"
-          value={companyUrl}
-          onChange={(event) => setCompanyUrl(event.target.value)}
-          onBlur={() => touch('companyUrl')}
-          hint="Optional. The crawler finds the careers or hiring page itself — no need to link it directly."
-          error={touched.companyUrl && !check.fields.companyUrl.valid ? check.fields.companyUrl.reason : undefined}
-        />
+      <Input
+        label="Days until the interview"
+        type="number"
+        min={LIMITS.daysMin}
+        max={LIMITS.daysMax}
+        step={1}
+        required
+        value={days}
+        onChange={(event) => setDays(event.target.value)}
+        onBlur={() => touch('days')}
+        hint={`${LIMITS.daysMin} to ${LIMITS.daysMax}. One day is capped at a single day with nothing dropped; a long run gets real review days.`}
+        error={touched.days && !check.fields.days.valid ? check.fields.days.reason : undefined}
+        className="max-w-xs"
+      />
 
-        <Input
-          label="Days until the interview"
-          type="number"
-          min={LIMITS.daysMin}
-          max={LIMITS.daysMax}
-          step={1}
-          required
-          value={days}
-          onChange={(event) => setDays(event.target.value)}
-          onBlur={() => touch('days')}
-          hint={`${LIMITS.daysMin} to ${LIMITS.daysMax}. One day is capped at a single day with nothing dropped; a long run gets real review days.`}
-          error={touched.days && !check.fields.days.valid ? check.fields.days.reason : undefined}
-          className="max-w-xs"
-        />
+      {error ? <ErrorState error={error} title="Could not start the kit" /> : null}
 
-        {error ? <ErrorState error={error} title="Could not start the kit" /> : null}
+      {/* The reasons the button cannot be pressed. Polite, because this changes when a
+          field becomes valid — rarely — and it is what the user is waiting to hear. */}
+      <div aria-live="polite" id="submit-reasons">
+        {check.valid ? null : (
+          <ul className="list-inside list-disc space-y-1 text-sm text-slate-600">
+            {check.reasons.map((reason) => (
+              <li key={reason}>{reason}</li>
+            ))}
+          </ul>
+        )}
+      </div>
 
-        {/* The reasons the button cannot be pressed. Polite, because this changes when a
-            field becomes valid — rarely — and it is what the user is waiting to hear. */}
-        <div aria-live="polite" id="submit-reasons">
-          {check.valid ? null : (
-            <ul className="list-inside list-disc space-y-1 text-sm text-slate-600">
-              {check.reasons.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        <Button type="submit" disabled={!check.valid || isLoading} aria-describedby="submit-reasons">
-          {isLoading ? 'Starting…' : 'Build this kit'}
-        </Button>
-      </form>
-    </section>
+      <Button type="submit" disabled={!check.valid || isLoading} aria-describedby="submit-reasons">
+        {isLoading ? 'Starting…' : 'Build this kit'}
+      </Button>
+    </form>
   );
 }
