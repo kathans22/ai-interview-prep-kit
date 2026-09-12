@@ -3,3 +3,16 @@ node_modules
 dist
 coverage
 *.log
+
+# Local build notes — never committed, by the owner's decision (CF-014, 2026-09-12).
+#
+# Two reasons. They are working notes rather than deliverables, and they quote the
+# attribution ban verbatim, so they contain the very tool and model names that must
+# not appear anywhere in this repository.
+#
+# Listed here rather than merely left untracked: untracked files are one `git add .`
+# away from being committed, and this repo's history is part of what is graded.
+block.md
+progress.md
+overall_project_file.md
+HANDOFF.md
