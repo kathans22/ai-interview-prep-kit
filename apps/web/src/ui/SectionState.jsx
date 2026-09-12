@@ -18,6 +18,13 @@
  * ORDER MATTERS. `error` is checked before `empty`, because a failed request also has no
  * rows — reversing them reports a failure as "nothing here yet", which tells someone
  * their data is gone when it is merely unreachable.
+ *
+ * A REFRESH MUST NOT BLANK A SCREEN SOMEONE IS READING. `hasContent` says "we already
+ * have something to show", and while it is true a loading status keeps rendering the
+ * children instead of replacing them with a spinner. Without it, every background
+ * refresh throws the page away and rebuilds it — which on a live screen looks like a
+ * flicker and, on the kit page, means the step list a user is watching disappears the
+ * moment the build finishes and its status is re-read.
  */
 
 import { ASYNC_STATES } from '../hooks/useAsync.js';
@@ -31,8 +38,11 @@ export default function SectionState({
   onRetry,
   loadingLabel = 'Loading…',
   empty = null,
+  hasContent = false,
   children,
 }) {
+  if (hasContent && status === ASYNC_STATES.loading) return children;
+
   if (status === ASYNC_STATES.loading || status === ASYNC_STATES.idle) {
     return (
       <div className="py-8">
