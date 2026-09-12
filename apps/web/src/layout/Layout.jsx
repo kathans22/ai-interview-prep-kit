@@ -51,6 +51,21 @@ export default function Layout() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
+      {/* THE FIRST FOCUSABLE THING ON THE PAGE, and it has to be first in the DOM to
+          work — a skip link placed after the nav skips nothing. Hidden until focused:
+          `sr-only` keeps it available to a screen reader, `focus:not-sr-only` makes it
+          visible the moment it is tabbed to, which is the only moment it is useful.
+
+          It exists because the header's links come before the content on every screen,
+          so reaching the page itself by keyboard otherwise means tabbing past all of
+          them, on every navigation. Its target is `#main-content` on the <main> below. */}
+      <a
+        href="#main-content"
+        className="sr-only focus:not-sr-only focus:absolute focus:start-4 focus:top-4 focus:z-50 focus:rounded-md focus:border focus:border-slate-300 focus:bg-white focus:px-3 focus:py-2 focus:text-sm focus:font-medium focus:text-slate-900"
+      >
+        Skip to content
+      </a>
+
       <header className="border-b border-slate-200 bg-white">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
           <Link to="/kits" className="text-sm font-semibold tracking-tight text-slate-900">

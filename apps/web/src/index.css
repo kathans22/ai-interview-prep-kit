@@ -2,3 +2,69 @@
    tailwind.config.js file. Theme tokens, when the design needs them, are declared here
    in an @theme block rather than in a JavaScript config. */
 @import 'tailwindcss';
+
+/* --------------------------------------------------------------------------
+   FOCUS IS VISIBLE EVERYWHERE, AND NO COMPONENT CAN DROP IT.
+
+   Stated globally rather than as a class on each control, for one reason: a
+   utility that every interactive element must remember is a utility some
+   element will forget, and the one that forgets is invisible until someone
+   tries to use the keyboard. Declared once here, a new button inherits it
+   without knowing this file exists.
+
+   `:focus-visible`, not `:focus`, so a mouse click does not leave a ring
+   behind — which is the reason people remove focus styling in the first
+   place, and then keyboard users pay for it.
+
+   The offset matters as much as the ring. Two pixels of page background
+   between the control and the outline is what keeps the ring readable on a
+   dark button, where an inset ring would sit on nearly the same colour.
+
+   `--color-slate-900` is Tailwind v4's own token, confirmed present in the
+   compiled stylesheet rather than assumed.
+   -------------------------------------------------------------------------- */
+@layer base {
+  :where(a, button, input, select, textarea, summary, dialog, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-slate-900);
+    outline-offset: 2px;
+  }
+
+  /* A dialog receives focus when it opens. Ringing the whole modal at that
+     moment is noise, not information — the controls inside it still ring. */
+  dialog:focus-visible {
+    outline: none;
+  }
+}
+
+/* --------------------------------------------------------------------------
+   REDUCED MOTION, SWEPT GLOBALLY.
+
+   `prefers-reduced-motion` is an accessibility setting, not a preference about
+   taste: for people with vestibular disorders, movement causes nausea and
+   dizziness. Honouring it per component is the same trap as focus styling —
+   it holds until someone adds a transition and does not think about it.
+
+   So every animation and transition is reduced here, at the end of the
+   cascade, for everything. `!important` is deliberate and is the one place in
+   this project it is justified: a utility class carries higher specificity
+   than a bare selector, and without it every `transition-*` and `animate-*`
+   Tailwind emits would win.
+
+   Near-zero rather than `none`: a duration of 0.01ms still fires transitionend
+   and animationend, so code that waits for one does not hang. Setting
+   `animation: none` breaks exactly that and the failure looks like a frozen UI.
+
+   `scroll-behavior: auto` is included because a smooth scroll is motion too,
+   and router-driven scrolling is the kind that arrives unannounced.
+   -------------------------------------------------------------------------- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    transition-delay: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
