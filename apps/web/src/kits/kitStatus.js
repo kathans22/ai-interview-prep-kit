@@ -22,13 +22,17 @@
  * visibly distinct", and it is available because the server records a code rather than
  * just a status.
  *
- * ONE ACTION, HONESTLY LABELLED. The server has a single mechanism for both retrying and
- * resuming: `POST /api/kits/:id/resume` continues from a checkpoint when one exists and
- * starts from the beginning when it does not, and its response says which. There is no
- * flag to force a fresh start, and `GET /api/kits/:id` returns only `jdChars` rather
- * than the job description, so the client cannot rebuild the input to submit a new kit
- * either. Two buttons calling one endpoint would be a lie about what they do, so there
- * is one — and what actually happened is reported afterwards from `resumedFrom`.
+ * CONTINUING AND STARTING OVER ARE NOW TWO REAL ACTIONS. They were not: the server had a
+ * single mechanism whose behaviour depended on hidden state — resume from a checkpoint
+ * when one exists, start over when it does not — so a client could offer one button and
+ * explain afterwards which had happened, and nothing more honest than that. Two buttons
+ * calling one endpoint would have been a lie about what they do.
+ *
+ * `POST /api/kits/:id/resume` now takes `fresh: true`, which ignores any checkpoint and
+ * discards it, and the kit read reports `hasCheckpoint`. Between them the client can
+ * offer the choice AND only offer it when there is something to choose between. The
+ * `primary` action below is still one action, because a LIST row wants one obvious next
+ * thing; the detail page is where the choice belongs.
  */
 
 /**
@@ -150,6 +154,11 @@ export function isSettled(kit) {
  * saying: one skips work already paid for out of a daily model quota, the other does not.
  */
 export function describeResume(response) {
+  // The server's own sentence first: it distinguishes three outcomes this function
+  // cannot see apart — resumed, nothing to resume from, and started over on request —
+  // and it was written to be read.
+  if (typeof response?.message === 'string' && response.message !== '') return response.message;
+
   if (response?.resumedFrom === 'checkpoint') {
     return 'Continuing from the last checkpoint — the steps that already finished will not run again.';
   }

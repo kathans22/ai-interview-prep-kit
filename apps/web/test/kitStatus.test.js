@@ -127,3 +127,13 @@ test('resuming says which of the two things happened', () => {
   assert.match(describeResume({ resumedFrom: 'the beginning' }), /from the start/);
   assert.match(describeResume({}), /from the start/, 'an unknown answer must not claim a checkpoint');
 });
+
+test('the server own sentence wins, because it can tell three outcomes apart', () => {
+  // `resumedFrom` is 'the beginning' both when there was no checkpoint and when the user
+  // asked to discard one. Only the server's message distinguishes them.
+  assert.equal(
+    describeResume({ resumedFrom: 'the beginning', message: 'Starting again from the beginning, as asked.' }),
+    'Starting again from the beginning, as asked.'
+  );
+  assert.match(describeResume({ resumedFrom: 'the beginning', message: '' }), /from the start/);
+});

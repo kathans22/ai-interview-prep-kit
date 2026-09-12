@@ -249,7 +249,19 @@ export const kits = {
 
   batch: (cases) => request('/api/kits/batch', { method: 'POST', body: { cases } }),
 
-  resume: (id) => request(`/api/kits/${encodeURIComponent(id)}/resume`, { method: 'POST' }),
+  /**
+   * Continue a kit, or deliberately start it over.
+   *
+   * `fresh: true` tells the server to ignore any checkpoint and discard it. Without the
+   * flag the endpoint resumes when a checkpoint exists and starts over when it does not,
+   * which is one behaviour dependent on hidden state — not two actions a person can
+   * choose between.
+   */
+  resume: (id, { fresh = false } = {}) =>
+    request(`/api/kits/${encodeURIComponent(id)}/resume`, {
+      method: 'POST',
+      body: { fresh },
+    }),
 
   list: ({ limit, signal } = {}) =>
     request(`/api/kits${limit ? `?limit=${encodeURIComponent(limit)}` : ''}`, { signal }),

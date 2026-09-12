@@ -44,6 +44,8 @@ export function useKit(id) {
     status: data?.status ?? null,
     /** Which sections a regeneration can still be undone on. */
     canUndo: data?.canUndo ?? {},
+    /** Whether a resume would have anything to resume FROM. Never the checkpoint itself. */
+    hasCheckpoint: Boolean(data?.hasCheckpoint),
     progress: data?.progress ?? [],
     /** The build's own failure, when it has one. Distinct from a request failure. */
     buildError: data?.error ?? null,
@@ -91,7 +93,7 @@ export function useCreateBatch() {
  * different fractions of a day's model quota.
  */
 export function useResumeKit() {
-  const task = useCallback((signal, id) => kits.resume(id), []);
+  const task = useCallback((signal, id, options) => kits.resume(id, options), []);
   const { run, ...rest } = useAsync(task, { immediate: false });
 
   return { ...rest, resume: run };

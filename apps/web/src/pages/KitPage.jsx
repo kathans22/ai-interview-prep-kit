@@ -36,7 +36,7 @@ const FINISHED = new Set(['ready', 'failed']);
 
 export default function KitPage() {
   const { id } = useParams();
-  const { status, progress, buildError, input, requestStatus, error, reload } = useKit(id);
+  const { status, progress, buildError, input, hasCheckpoint, requestStatus, error, reload } = useKit(id);
 
   // The stream runs alongside the fetch. Whichever lands first does not discard the
   // other — the hook merges by entry identity.
@@ -74,8 +74,8 @@ export default function KitPage() {
   const { resume, isLoading: resuming } = useResumeKit();
   const { show } = useToast();
 
-  async function handleResume() {
-    const response = await resume(id).catch((thrown) => {
+  async function handleResume({ fresh = false } = {}) {
+    const response = await resume(id, { fresh }).catch((thrown) => {
       show(thrown.message, { tone: 'error' });
       return null;
     });
@@ -139,9 +139,26 @@ export default function KitPage() {
               {buildError?.code ? <p className="mt-2 font-mono text-xs text-slate-500">{buildError.code}</p> : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                <Button onClick={handleResume} disabled={resuming}>
-                  {resuming ? 'Starting…' : described.primary.label}
-                </Button>
+                {/* TWO GENUINELY DIFFERENT ACTIONS, and they are only different because
+                    the server grew a `fresh` flag to make them so. "Continue" reuses the
+                    checkpoint; "Start over" discards it and rebuilds. The first is only
+                    OFFERED when there is a checkpoint to reuse — a button promising to
+                    skip completed work when there is none to skip is a promise the user
+                    pays for in quota to discover. */}
+                {hasCheckpoint ? (
+                  <>
+                    <Button onClick={() => handleResume({ fresh: false })} disabled={resuming}>
+                      {resuming ? 'Starting…' : 'Continue from the checkpoint'}
+                    </Button>
+                    <Button variant="secondary" onClick={() => handleResume({ fresh: true })} disabled={resuming}>
+                      Start this kit over
+                    </Button>
+                  </>
+                ) : (
+                  <Button onClick={() => handleResume({ fresh: false })} disabled={resuming}>
+                    {resuming ? 'Starting…' : described.primary.label}
+                  </Button>
+                )}
 
                 {/* The honest second option. The server has ONE continue mechanism — it
                     resumes from a checkpoint if there is one and starts over if not — and
@@ -149,14 +166,15 @@ export default function KitPage() {
                     returns the description's length, not its text. So rather than a
                     second button that secretly does the same thing, this is a link to
                     start a fresh kit, which is what "retry from scratch" honestly is. */}
-                <Link to="/kits/new" className={buttonClasses({ variant: 'secondary' })}>
-                  Start a new kit instead
+                <Link to="/kits/new" className={buttonClasses({ variant: 'ghost' })}>
+                  Build a different posting
                 </Link>
               </div>
 
               <p className="mt-3 text-xs text-slate-500">
-                Continuing picks up from the last checkpoint when one was saved, and starts from the
-                beginning when none was. It says which before it spends anything.
+                {hasCheckpoint
+                  ? 'Continuing skips the steps that already finished, so it spends less of the daily model quota. Starting over discards that saved progress.'
+                  : 'No checkpoint was saved for this kit, so this builds again from the start.'}
               </p>
             </Card>
           ) : null}
