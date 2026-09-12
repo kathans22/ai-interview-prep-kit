@@ -1,0 +1,63 @@
+{
+  "fixtureId": "05-mixed-kinds",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-12T13:20:40.937Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "3+ years with Python and pandas for clinical data transformation",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "3+ years with Python and pandas for clinical data transformation"
+      },
+      {
+        "text": "Working knowledge of CDISC SDTM and ADaM standards",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Working knowledge of CDISC SDTM and ADaM standards"
+      },
+      {
+        "text": "Experience with GCP BigQuery or a comparable warehouse",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Experience with GCP BigQuery or a comparable warehouse"
+      },
+      {
+        "text": "Explain a data quality problem without jargon to clinicians",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "You will present findings to clinicians who are not engineers, so you must be able to explain a data quality problem without jargon"
+      },
+      {
+        "text": "Comfortable pushing back on a study team when a requested analysis would not be statistically sound",
+        "kind": "behavioural",
+        "priority": "must",
+        "evidence": "Comfortable pushing back on a study team when a requested analysis would not be statistically sound"
+      },
+      {
+        "text": "Understanding of GxP validation and why an audit trail matters",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Understanding of GxP validation and why an audit trail matters"
+      },
+      {
+        "text": "Familiarity with oncology endpoints such as PFS and ORR",
+        "kind": "domain",
+        "priority": "must",
+        "evidence": "Familiarity with oncology endpoints such as PFS and ORR"
+      },
+      {
+        "text": "Experience with R",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Experience with R"
+      },
+      {
+        "text": "Prior work at a CRO",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "Prior work at a CRO"
+      }
+    ]
+  }
+}

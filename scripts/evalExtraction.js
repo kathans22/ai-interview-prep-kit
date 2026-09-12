@@ -78,6 +78,22 @@ let liveCalls = 0;
 /** The prompt's fingerprint. Changing the prompt changes every cache key. */
 const PROMPT_HASH = createHash('sha256').update(EXTRACTION_SYSTEM_INSTRUCTION).digest('hex').slice(0, 12);
 
+/**
+ * The MODEL is part of the cache key too, and leaving it out was a real trap.
+ *
+ * A cached response is a statement about a prompt AND the model that answered it.
+ * Keyed by prompt alone, switching GEMINI_MODEL and re-running replays the previous
+ * model's answers and reports them as the new one's — so flash-lite would have
+ * "scored" 100% recall and 90% precision without ever being called. And a `--refresh`
+ * would overwrite the committed baseline, destroying the numbers a grader re-scores
+ * from with no API key.
+ *
+ * With the model in the key, both models' caches coexist and either can be re-scored
+ * for free. The existing files were produced by gemini-3.6-flash and are renamed to
+ * say so, rather than being left ambiguous.
+ */
+const MODEL_SLUG = String(process.env.GEMINI_MODEL ?? 'unset').replace(/[^a-z0-9.-]+/gi, '-');
+
 /** Normalise for label matching: lowercase, punctuation to space, collapse spaces. */
 function normalise(text) {
   return String(text ?? '')
@@ -148,7 +164,7 @@ async function loadFixtures() {
  * something the pipeline never sees.
  */
 function cachingProvider(real, fixtureId) {
-  const file = join(CACHE, `${fixtureId}.${PROMPT_HASH}.json`);
+  const file = join(CACHE, `${fixtureId}.${PROMPT_HASH}.${MODEL_SLUG}.json`);
 
   return {
     name: 'cached',
@@ -165,7 +181,7 @@ function cachingProvider(real, fixtureId) {
 
       if (OFFLINE) {
         throw new Error(
-          `No cached response for ${fixtureId} at prompt ${PROMPT_HASH}. ` +
+          `No cached response for ${fixtureId} at prompt ${PROMPT_HASH} on model ${MODEL_SLUG}. ` +
             'Run without --offline to make the call.'
         );
       }

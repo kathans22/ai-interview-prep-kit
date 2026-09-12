@@ -1,0 +1,51 @@
+{
+  "fixtureId": "02-priority-wording",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-12T13:20:35.399Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "Have 4+ years running production services on Linux",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "4+ years running production services on Linux"
+      },
+      {
+        "text": "Have strong experience with Terraform",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Strong experience with Terraform is essential"
+      },
+      {
+        "text": "Have solid Python for our tooling",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "solid Python for our tooling"
+      },
+      {
+        "text": "Have Kubernetes operator experience",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Kubernetes operator experience"
+      },
+      {
+        "text": "Be familiar with FHIR or HL7",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "familiarity with FHIR or HL7"
+      },
+      {
+        "text": "Have worked in a regulated environment",
+        "kind": "domain",
+        "priority": "nice",
+        "evidence": "worked in a regulated environment"
+      },
+      {
+        "text": "Have exposure to Grafana",
+        "kind": "technical",
+        "priority": "nice",
+        "evidence": "Exposure to Grafana is a plus"
+      }
+    ]
+  }
+}

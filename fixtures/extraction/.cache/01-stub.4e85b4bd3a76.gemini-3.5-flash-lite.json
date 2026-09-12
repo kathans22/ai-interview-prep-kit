@@ -1,0 +1,21 @@
+{
+  "fixtureId": "01-stub",
+  "promptHash": "4e85b4bd3a76",
+  "at": "2026-09-12T13:20:33.664Z",
+  "data": {
+    "requirements": [
+      {
+        "text": "The candidate must be comfortable with Node.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Node"
+      },
+      {
+        "text": "The candidate must be comfortable with Postgres.",
+        "kind": "technical",
+        "priority": "must",
+        "evidence": "Postgres"
+      }
+    ]
+  }
+}

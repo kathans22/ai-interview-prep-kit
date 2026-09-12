@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "evaluate": "node --env-file-if-exists=.env apps/server/src/cli/evaluate.js",
-    "eval:extraction": "node scripts/evalExtraction.js",
+    "eval:extraction": "node --env-file-if-exists=.env scripts/evalExtraction.js",
     "smoke": "node scripts/smoke.js",
     "dev:server": "npm run dev --workspace @aipk/server",
     "dev:web": "npm run dev --workspace @aipk/web",
