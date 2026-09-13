@@ -128,12 +128,25 @@ export function mountPracticeRoutes(app) {
     route(async (request, response) => {
       const entries = request.kit.practice ?? [];
 
+      // The requirements a scored answer missed, across the whole log. A card covering one
+      // of them is pulled forward in the deck — the missed outline points resurfacing as
+      // the cards that would have prevented them.
+      const weakRequirements = [
+        ...new Set(entries.flatMap((entry) => (Array.isArray(entry.missedRequirements) ? entry.missedRequirements : []))),
+      ];
+
       response.json({
         total: entries.length,
         entries,
-        // Least confident first (`orderCards`). Empty for a kit that has not finished
-        // building, which has no flashcards to order.
-        deck: orderCards({ cards: request.kit.kit?.flashcards ?? [], ratings: entries, now: Date.now() }),
+        // Least confident first (`orderCards`), with weak areas pulled forward. Empty for a
+        // kit that has not finished building, which has no flashcards to order.
+        deck: orderCards({
+          cards: request.kit.kit?.flashcards ?? [],
+          ratings: entries,
+          now: Date.now(),
+          weakRequirements,
+        }),
+        weakRequirements,
         cards: summariseBy(entries, 'cardId'),
         // Weakest first: the point of recording confidence is to find what to revise,
         // and a list sorted by question id makes that the reader's job.

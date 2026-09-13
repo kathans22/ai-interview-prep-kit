@@ -119,7 +119,28 @@ function seedKit() {
         updatedAt: '2026-09-13T00:00:00.000Z',
       },
     ],
-    flashcards: [],
+    // f2 sits BEFORE f1 in the kit's own order, so a deck that puts f1 first is the weak
+    // pull doing it, not the tie-break.
+    flashcards: [
+      {
+        id: 'f2',
+        front: 'Mentoring a junior',
+        back: 'Pair on a small real task.',
+        requirement_ids: ['r2'],
+        origin: 'generated',
+        pinned: false,
+        updatedAt: '2026-09-13T00:00:00.000Z',
+      },
+      {
+        id: 'f1',
+        front: 'How many years with React?',
+        back: 'Five or more.',
+        requirement_ids: ['r1'],
+        origin: 'generated',
+        pinned: false,
+        updatedAt: '2026-09-13T00:00:00.000Z',
+      },
+    ],
     schedule: {
       days_available: 1,
       days: [
@@ -310,6 +331,35 @@ test('another user\'s kit is invisible to the scorer', async () => {
 
   const response = await client.call(scorePath(otherKitId), { method: 'POST', body: JSON.stringify(SCORE_BODY) });
   assert.equal(response.status, 404, 'scoring someone else\'s question would leak its outline');
+});
+
+test('the scored answer pulls its weak areas forward in the served deck', async () => {
+  // A fresh kit and account, so the log holds exactly what this test puts in it.
+  const fresh = makeClient();
+  await fresh.signUp('deck@example.com');
+  const freshKitId = await giveKitTo('deck@example.com');
+
+  // Before any score, the deck is the kit's order (both cards unseen, tied).
+  const before2 = await fresh.call(`/api/kits/${freshKitId}/practice`);
+  assert.deepEqual(
+    before2.body.deck.map((card) => card.id),
+    ['f2', 'f1'],
+    'the kit order stands while nothing is weak'
+  );
+
+  // Scoring q2 (covers only r1) records r1 as missed. The card covering r1 is f1, which
+  // sits LAST in the kit's order — only the weak pull can put it first.
+  const response = await fresh.call(scorePath(freshKitId, 'q2'), { method: 'POST', body: JSON.stringify(SCORE_BODY) });
+  assert.equal(response.status, 201);
+
+  const after2 = await fresh.call(`/api/kits/${freshKitId}/practice`);
+  assert.deepEqual(after2.body.weakRequirements, ['r1']);
+  assert.deepEqual(
+    after2.body.deck.map((card) => card.id),
+    ['f1', 'f2'],
+    'the card covering the missed requirement now leads'
+  );
+  assert.equal(after2.body.deck[0].weak, true);
 });
 
 test('a model failure is a coded error, the log is untouched, and the kit still stands', async () => {
