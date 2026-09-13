@@ -61,7 +61,7 @@ function describePast(past) {
   return `Last practised: ${label} · ${past.attempts} ${past.attempts === 1 ? 'time' : 'times'}`;
 }
 
-export default function FlashcardStepper({ cards, requirements, history, onRate }) {
+export default function FlashcardStepper({ cards, requirements, history, onRate, onFinish, autoFocus = false }) {
   const [session, setSession] = useState(() => createSession(cards.map((card) => card.id)));
   const answerRef = useRef(null);
   const revealRef = useRef(null);
@@ -77,6 +77,13 @@ export default function FlashcardStepper({ cards, requirements, history, onRate 
   useEffect(() => {
     if (session.revealed) answerRef.current?.focus();
   }, [session.revealed]);
+
+  // A session started from the summary: the summary and its button have gone, so focus
+  // goes to the first thing to do in the new session.
+  useEffect(() => {
+    if (autoFocus) revealRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // After a rating moves the session on, the next thing to do is reveal the next card.
   useEffect(() => {
@@ -195,6 +202,11 @@ export default function FlashcardStepper({ cards, requirements, history, onRate 
 
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3">
         {control('Previous', isFirst(session), () => setSession(previous))}
+        {/* Finishing is always available: a session is as long as the person has time
+            for, and the summary is where the untouched requirements are named. */}
+        <button type="button" onClick={() => onFinish?.(session)} className={buttonClasses({ variant: 'ghost' })}>
+          Finish session
+        </button>
         {control('Next', isLast(session), () => setSession(next))}
       </footer>
 

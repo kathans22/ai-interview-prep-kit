@@ -107,7 +107,11 @@ export function useDeleteKit() {
   return { ...rest, remove: run };
 }
 
-/** This kit's practice history: the log, a summary per card, and one per question, weakest first. */
+/**
+ * This kit's practice history: the log, the deck in the order to practise next (least
+ * confident first — the server's order, never re-sorted here), a summary per card, and
+ * one per question, weakest first.
+ */
 export function usePracticeHistory(id) {
   const task = useCallback((signal) => practice.history(id, signal), [id]);
   const { data, ...rest } = useAsync(task, { deps: [id], immediate: Boolean(id) });
@@ -116,6 +120,7 @@ export function usePracticeHistory(id) {
     ...rest,
     total: data?.total ?? 0,
     entries: data?.entries ?? [],
+    deck: data?.deck ?? [],
     cards: data?.cards ?? [],
     questions: data?.questions ?? [],
   };

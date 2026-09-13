@@ -28,17 +28,26 @@
 /** A session over these card ids, in this order. Duplicates and blanks are dropped. */
 export function createSession(cardIds) {
   const order = [...new Set((Array.isArray(cardIds) ? cardIds : []).filter(Boolean))];
-  return { order, index: 0, revealed: false, ratings: {} };
+  return { order, index: 0, revealed: false, ratings: {}, seen: [] };
 }
+
+/**
+ * Card ids whose answer was revealed in this session, in the order they were first seen.
+ * A card that was stepped past without looking at its answer was not practised, so it is
+ * not "seen" — whatever the screen showed of its front.
+ */
+export const seenIds = (session) => session.seen ?? [];
 
 export const currentCardId = (session) => session.order[session.index] ?? null;
 export const isFirst = (session) => session.index <= 0;
 export const isLast = (session) => session.index >= session.order.length - 1;
 
-/** Show the current card's answer. Revealing twice changes nothing. */
+/** Show the current card's answer, and count the card as seen. Revealing twice changes nothing. */
 export function reveal(session) {
   if (session.order.length === 0 || session.revealed) return session;
-  return { ...session, revealed: true };
+  const cardId = currentCardId(session);
+  const seen = seenIds(session);
+  return { ...session, revealed: true, seen: seen.includes(cardId) ? seen : [...seen, cardId] };
 }
 
 /** Move by `delta` cards, stopping at either end. A move that goes nowhere changes nothing. */
