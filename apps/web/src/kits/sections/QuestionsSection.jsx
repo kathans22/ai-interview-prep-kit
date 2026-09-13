@@ -27,6 +27,17 @@
  * and only where the drop would change something — a line under the question's own
  * position would promise a move that does nothing.
  *
+ * EVERY DRAG HAS A KEYBOARD EQUIVALENT, and the drag handle is therefore hidden from
+ * assistive technology rather than offered as a control it cannot operate. Move up and
+ * Move down step within the category; Change category opens the list of the others.
+ * Both produce exactly the operations a drag would. After a move, focus stays on the
+ * control that made it — even when the row has jumped to another category — and a
+ * polite announcement says where the question now is, because the jump itself is silent.
+ *
+ * AN UNAVAILABLE MOVE IS `aria-disabled`, NOT `disabled`. A disabled button cannot hold
+ * focus, so pressing Move up until the question reaches the top would throw focus to the
+ * page body on the last press.
+ *
  * FOCUS NEVER DROPS TO THE TOP OF THE PAGE. It returns to the Add button when the form
  * closes, to the Delete button after an undo, and — when the undo window closes under a
  * focused Undo button — to the category's Add button, which is always there.
@@ -44,10 +55,18 @@ import Card from '../../ui/Card.jsx';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import SectionState from '../../ui/SectionState.jsx';
 import AddQuestionForm from '../AddQuestionForm.jsx';
+import CategoryMenu from '../CategoryMenu.jsx';
 import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
 import EditableText from '../EditableText.jsx';
-import { DIFFICULTY_LABELS, deriveSectionState, groupQuestions, indexRequirements } from '../kitView.js';
-import { planMove } from '../reorder.js';
+import {
+  CATEGORY_LABELS,
+  DIFFICULTY_LABELS,
+  QUESTION_CATEGORY_ORDER,
+  deriveSectionState,
+  groupQuestions,
+  indexRequirements,
+} from '../kitView.js';
+import { planMove, planStep, positionAfter } from '../reorder.js';
 import { useQuestionDrag } from '../useQuestionDrag.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
 
@@ -86,8 +105,29 @@ export default function QuestionsSection({ kit, editor }) {
   const [justDeleted, setJustDeleted] = useState(null);
   const deleteButtons = useRef({});
 
+  const [announcement, setAnnouncement] = useState('');
+  const moveControls = useRef({});
+  const moveControlRef = (id, control) => (node) => {
+    moveControls.current[`${id}:${control}`] = node;
+  };
+
+  /**
+   * Apply a move, say where the question ended up, and — for a keyboard move — put focus
+   * back on the control that made it, which may now be in another category's list.
+   */
+  function move(ops, id, control = null) {
+    if (ops.length === 0) return;
+    const where = positionAfter(questions, ops, id);
+    editor.arrange(ops);
+    if (where) {
+      const label = CATEGORY_LABELS[where.category] ?? where.category;
+      setAnnouncement(`${id} moved to position ${where.position} of ${where.total} in ${label}.`);
+    }
+    if (control) requestAnimationFrame(() => moveControls.current[`${id}:${control}`]?.focus());
+  }
+
   const drag = useQuestionDrag({
-    onDrop: (drop) => editor.arrange(planMove(questions, drop)),
+    onDrop: (drop) => move(planMove(questions, drop), drop.id),
   });
   // Where the line goes — and whether there is a line at all.
   const dropTarget =
@@ -260,6 +300,41 @@ export default function QuestionsSection({ kit, editor }) {
                             </p>
                           </EditableText>
                         </details>
+
+                        <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2">
+                          {['up', 'down'].map((direction) => {
+                            const ops = planStep(questions, question.id, direction);
+                            const unavailable = ops.length === 0;
+                            const text = direction === 'up' ? 'Move up' : 'Move down';
+                            return (
+                              <button
+                                key={direction}
+                                ref={moveControlRef(question.id, direction)}
+                                type="button"
+                                aria-label={`${text}, ${question.id}`}
+                                aria-disabled={unavailable || undefined}
+                                onClick={() => move(ops, question.id, direction)}
+                                className={buttonClasses({
+                                  variant: 'ghost',
+                                  size: 'sm',
+                                  className: unavailable ? 'cursor-not-allowed opacity-50' : '',
+                                })}
+                              >
+                                {text}
+                              </button>
+                            );
+                          })}
+                          <CategoryMenu
+                            id={question.id}
+                            options={QUESTION_CATEGORY_ORDER.filter((category) => category !== question.category).map(
+                              (category) => ({ category, label: CATEGORY_LABELS[category] })
+                            )}
+                            buttonRef={moveControlRef(question.id, 'category')}
+                            onChoose={(category) =>
+                              move(planMove(questions, { id: question.id, category, beforeId: null }), question.id, 'category')
+                            }
+                          />
+                        </div>
                       </li>
                     );
                   })}
@@ -297,6 +372,11 @@ export default function QuestionsSection({ kit, editor }) {
           ))}
         </div>
       </SectionState>
+
+      {/* Where a moved question landed, for anyone who cannot see the row jump. */}
+      <p role="status" className="sr-only">
+        {announcement}
+      </p>
 
       <ConfirmDialog
         open={Boolean(confirming)}

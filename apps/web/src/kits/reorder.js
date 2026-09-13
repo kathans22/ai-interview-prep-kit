@@ -21,6 +21,8 @@
  * sent, so the real question, once saved, keeps its place.
  */
 
+import { applyLocalOps } from './localOps.js';
+
 /**
  * @param {object[]} questions  the questions as the screen shows them
  * @param {{ id: string, category: string, beforeId?: string|null }} drop
@@ -45,4 +47,43 @@ export function planMove(questions, { id, category, beforeId = null }) {
   if (!sameCategory) ops.push({ type: 'move-category', id, category });
   ops.push({ type: 'reorder-questions', category, question_ids: next });
   return ops;
+}
+
+/**
+ * The keyboard's move: one place up or down within the question's own category.
+ *
+ * Expressed as a drop — "before the question above", or "before the one two below" — so
+ * a key press and a drag produce identical operations and share every guarantee. Empty
+ * at either end of the category, which is what disables the control.
+ */
+export function planStep(questions, id, direction) {
+  const list = (Array.isArray(questions) ? questions : []).filter((question) => question && !question.pendingAdd);
+  const moving = list.find((question) => question.id === id);
+  if (!moving) return [];
+
+  const order = list.filter((question) => question.category === moving.category).map((question) => question.id);
+  const index = order.indexOf(id);
+
+  if (direction === 'up') {
+    if (index <= 0) return [];
+    return planMove(questions, { id, category: moving.category, beforeId: order[index - 1] });
+  }
+  if (direction === 'down') {
+    if (index === -1 || index >= order.length - 1) return [];
+    return planMove(questions, { id, category: moving.category, beforeId: order[index + 2] ?? null });
+  }
+  return [];
+}
+
+/**
+ * Where a question will be once the operations apply, counted the way the screen lists
+ * it — for the sentence announced after a move, since a screen reader user cannot see the
+ * row jump.
+ */
+export function positionAfter(questions, ops, id) {
+  const next = applyLocalOps({ questions: Array.isArray(questions) ? questions : [] }, ops).questions;
+  const moved = next.find((question) => question.id === id);
+  if (!moved) return null;
+  const order = next.filter((question) => question.category === moved.category).map((question) => question.id);
+  return { category: moved.category, position: order.indexOf(id) + 1, total: order.length };
 }

@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { planMove } from '../src/kits/reorder.js';
+import { planMove, planStep, positionAfter } from '../src/kits/reorder.js';
 import { applyLocalOps, orderCategory } from '../src/kits/localOps.js';
 import { confirm, createEditState, enqueue, resolveOrder, takeBatch } from '../src/kits/editQueue.js';
 
@@ -57,6 +57,38 @@ test('a question still being added is neither movable nor named in a list', () =
 test('a question awaiting its undo window is still on the server, so it is still named', () => {
   const withHeld = QUESTIONS.map((entry) => (entry.id === 'q3' ? { ...entry, pendingDelete: true } : entry));
   assert.deepEqual(planMove(withHeld, { id: 'q4', category: 'technical', beforeId: 'q1' })[0].question_ids, ['q4', 'q1', 'q3']);
+});
+
+// --- the keyboard path -------------------------------------------------------
+
+test('move up and move down step one place, as the same reorder a drag would send', () => {
+  // technical is q1, q3, q4 in array order.
+  assert.deepEqual(planStep(QUESTIONS, 'q3', 'up'), planMove(QUESTIONS, { id: 'q3', category: 'technical', beforeId: 'q1' }));
+  assert.deepEqual(planStep(QUESTIONS, 'q3', 'up')[0].question_ids, ['q3', 'q1', 'q4']);
+  assert.deepEqual(planStep(QUESTIONS, 'q1', 'down')[0].question_ids, ['q3', 'q1', 'q4']);
+  assert.deepEqual(planStep(QUESTIONS, 'q3', 'down')[0].question_ids, ['q1', 'q4', 'q3']);
+});
+
+test('there is no step past either end of a category', () => {
+  assert.deepEqual(planStep(QUESTIONS, 'q1', 'up'), []);
+  assert.deepEqual(planStep(QUESTIONS, 'q4', 'down'), []);
+  assert.deepEqual(planStep(QUESTIONS, 'q2', 'up'), [], 'alone in its category');
+  assert.deepEqual(planStep(QUESTIONS, 'q9', 'down'), [], 'no such question');
+});
+
+test('a question still being added is not a place to step past', () => {
+  const withPending = [...QUESTIONS, question('pending-1', 'technical', { pendingAdd: true })];
+  assert.deepEqual(planStep(withPending, 'q4', 'down'), []);
+});
+
+test('the announced position is where the question will be, in the category it will be in', () => {
+  const ops = planMove(QUESTIONS, { id: 'q2', category: 'technical', beforeId: null });
+  assert.deepEqual(positionAfter(QUESTIONS, ops, 'q2'), { category: 'technical', position: 4, total: 4 });
+  assert.deepEqual(positionAfter(QUESTIONS, planStep(QUESTIONS, 'q4', 'up'), 'q4'), {
+    category: 'technical',
+    position: 2,
+    total: 3,
+  });
 });
 
 // --- the preview ------------------------------------------------------------
