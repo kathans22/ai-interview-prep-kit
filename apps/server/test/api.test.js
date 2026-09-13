@@ -423,6 +423,112 @@ test('an edit marks provenance, so a later regeneration cannot overwrite it', as
   assert.deepEqual(regenerated.body.report.kept, ['q1']);
 });
 
+/** PATCH a kit at its current revision and return the response. */
+async function patchKit(who, kitId, ops) {
+  const current = await who.call(`/api/kits/${kitId}`);
+  return who.call(`/api/kits/${kitId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ revision: current.body.revision, ops }),
+  });
+}
+
+/** A generated flashcard, as `stampKit` leaves one. */
+const generatedCard = (id, requirementId) => ({
+  id,
+  front: `front of ${id}`,
+  back: `back of ${id}`,
+  requirement_ids: [requirementId],
+  origin: 'generated',
+  pinned: false,
+  updatedAt: '2026-09-11T00:00:00.000Z',
+});
+
+test('a generated flashcard can be edited, and editing marks it edited', async () => {
+  // Without this a regeneration could overwrite a card a person had improved.
+  const alice = client();
+  await alice.signUp('card-edit@example.com');
+  const kitId = await giveKitTo('card-edit@example.com');
+  await store.kits.write({ kitId, set: { 'kit.flashcards': [generatedCard('f1', 'r1')] } });
+
+  const response = await patchKit(alice, kitId, [{ type: 'edit-flashcard', id: 'f1', front: '  MY FRONT  ' }]);
+
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  const card = response.body.kit.flashcards.find((entry) => entry.id === 'f1');
+  assert.equal(card.front, 'MY FRONT', 'trimmed');
+  assert.equal(card.back, 'back of f1', 'the face not sent is left alone');
+  assert.equal(card.origin, 'edited');
+});
+
+test('a flashcard added by hand is manual, and stays manual when edited', async () => {
+  const alice = client();
+  await alice.signUp('card-add@example.com');
+  const kitId = await giveKitTo('card-add@example.com');
+
+  const added = await patchKit(alice, kitId, [
+    { type: 'add-flashcard', front: 'What is a closure?', back: 'A function plus its scope.', requirement_ids: ['r1'] },
+  ]);
+  assert.equal(added.status, 200, JSON.stringify(added.body));
+
+  const card = added.body.kit.flashcards.at(-1);
+  assert.match(card.id, /^f\d+$/);
+  assert.equal(card.origin, 'manual');
+
+  // Editing your own card must not relabel it as the model's work, corrected.
+  const edited = await patchKit(alice, kitId, [{ type: 'edit-flashcard', id: card.id, back: 'Revised.' }]);
+  assert.equal(edited.body.kit.flashcards.find((entry) => entry.id === card.id).origin, 'manual');
+});
+
+test('adding a flashcard for a requirement that does not exist is refused and writes nothing', async () => {
+  const alice = client();
+  await alice.signUp('card-bad-req@example.com');
+  const kitId = await giveKitTo('card-bad-req@example.com');
+
+  const response = await patchKit(alice, kitId, [
+    { type: 'add-flashcard', front: 'x', back: 'y', requirement_ids: ['r99'] },
+  ]);
+
+  assert.equal(response.status, 400);
+  assert.equal((await store.kits.findById(kitId)).kit.flashcards.length, 0);
+});
+
+test('a flashcard can be deleted, and an unknown one is a 400', async () => {
+  const alice = client();
+  await alice.signUp('card-delete@example.com');
+  const kitId = await giveKitTo('card-delete@example.com');
+  await store.kits.write({ kitId, set: { 'kit.flashcards': [generatedCard('f1', 'r1'), generatedCard('f2', 'r2')] } });
+
+  const deleted = await patchKit(alice, kitId, [{ type: 'delete-flashcard', id: 'f1' }]);
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+  assert.deepEqual(
+    deleted.body.kit.flashcards.map((entry) => entry.id),
+    ['f2']
+  );
+
+  const missing = await patchKit(alice, kitId, [{ type: 'delete-flashcard', id: 'f1' }]);
+  assert.equal(missing.status, 400);
+});
+
+test('pin works on a flashcard as well as a question, resolved by the id prefix', async () => {
+  const alice = client();
+  await alice.signUp('card-pin@example.com');
+  const kitId = await giveKitTo('card-pin@example.com');
+  await store.kits.write({ kitId, set: { 'kit.flashcards': [generatedCard('f1', 'r1')] } });
+
+  const pinned = await patchKit(alice, kitId, [
+    { type: 'pin', id: 'f1' },
+    { type: 'pin', id: 'q1' },
+  ]);
+  assert.equal(pinned.status, 200, JSON.stringify(pinned.body));
+  assert.equal(pinned.body.kit.flashcards.find((entry) => entry.id === 'f1').pinned, true);
+  assert.equal(pinned.body.kit.questions.find((entry) => entry.id === 'q1').pinned, true);
+
+  const unpinned = await patchKit(alice, kitId, [{ type: 'pin', id: 'f1', pinned: false }]);
+  assert.equal(unpinned.body.kit.flashcards.find((entry) => entry.id === 'f1').pinned, false);
+
+  const missing = await patchKit(alice, kitId, [{ type: 'pin', id: 'f9' }]);
+  assert.equal(missing.status, 400);
+});
+
 test('undo restores the section, once', async () => {
   const alice = client();
   await alice.signUp('undo@example.com');

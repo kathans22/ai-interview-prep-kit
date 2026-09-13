@@ -8,11 +8,18 @@
  * schedule are derived (`recomputeDerived`), or whether a write may land
  * (`writeWithRevision`). The route assembles those three and maps the result.
  *
- * FIVE OPERATIONS, ONE ENDPOINT. `PATCH /api/kits/:id` takes `{ revision, ops: [...] }`.
- * A batch of operations rather than five endpoints, because a drag-and-drop reorder is
- * one user action that moves several items, and sending it as five requests means five
- * revisions, five chances to conflict, and an interface that can end up half-applied.
- * One request, one revision bump, all-or-nothing.
+ * A CLOSED SET OF OPERATIONS, ONE ENDPOINT. `PATCH /api/kits/:id` takes
+ * `{ revision, ops: [...] }`. A batch rather than an endpoint per operation, because a
+ * drag-and-drop reorder is one user action that moves several items, and sending it as
+ * several requests means several revisions, several chances to conflict, and an
+ * interface that can end up half-applied. One request, one revision bump, all-or-nothing.
+ *
+ * FLASHCARDS ARE EDITABLE THE SAME WAY QUESTIONS ARE. They were not: the set had
+ * operations to edit, add, delete and pin questions and none for flashcards, while the
+ * builder the brief describes edits "any flashcard face", adds cards by hand, deletes
+ * them, and pins "every question and flashcard". A card a person could see and not
+ * change would also have been a card a regeneration could overwrite after they had
+ * improved it somewhere else and pasted it back.
  *
  * EVERY EDIT MARKS PROVENANCE. Touching a generated item makes it `edited`; adding one
  * makes it `manual`. This is not bookkeeping for its own sake — it is what stops the
@@ -28,8 +35,8 @@
 import { validateKit, formatValidationErrors } from '@aipk/core/contracts/validateKit.js';
 import { recomputeDerived } from '@aipk/core/contracts/merge.js';
 import { markEdited, markManual, setPinned, ORIGINS } from '@aipk/core/contracts/provenance.js';
-import { nextIdFor } from '@aipk/core/contracts/ids.js';
-import { QUESTION_CATEGORIES } from '@aipk/core/contracts/kitSchema.js';
+import { isValidId, nextIdFor } from '@aipk/core/contracts/ids.js';
+import { ID_PREFIXES, QUESTION_CATEGORIES } from '@aipk/core/contracts/kitSchema.js';
 
 import { route, ApiError } from './errors.js';
 import { validateRevision } from './validate.js';
@@ -45,6 +52,9 @@ export const EDIT_OPS = Object.freeze([
   'reorder-day',
   'pin',
   'edit-brief',
+  'edit-flashcard',
+  'add-flashcard',
+  'delete-flashcard',
 ]);
 
 /** More than this in one request is a client bug, not a user action. */
@@ -137,9 +147,54 @@ function applyOp(draft, op, stamp) {
     }
 
     case 'pin': {
-      const question = findQuestion(draft, op.id);
-      Object.assign(question, setPinned(question, op.pinned !== false, { updatedAt: stamp }));
+      // One operation for both kinds of item, resolved by the id's own prefix. The
+      // contract fixes those prefixes (`q` for questions, `f` for flashcards), so the
+      // dispatch is exact rather than a guess — and a client toggling a pin never has to
+      // know which list an item lives in.
+      const item = isValidId(op.id, ID_PREFIXES.flashcard) ? findFlashcard(draft, op.id) : findQuestion(draft, op.id);
+      Object.assign(item, setPinned(item, op.pinned !== false, { updatedAt: stamp }));
       return `${op.pinned === false ? 'unpinned' : 'pinned'} ${op.id}`;
+    }
+
+    case 'edit-flashcard': {
+      const card = findFlashcard(draft, op.id);
+      if (typeof op.front === 'string') card.front = op.front.trim();
+      if (typeof op.back === 'string') card.back = op.back.trim();
+
+      Object.assign(card, markEdited(card, { updatedAt: stamp }));
+      return `edited ${op.id}`;
+    }
+
+    case 'add-flashcard': {
+      const requirementIds = Array.isArray(op.requirement_ids) ? op.requirement_ids : [];
+      const known = new Set((draft.role?.requirements ?? []).map((entry) => entry.id));
+      for (const id of requirementIds) {
+        if (!known.has(id)) throw new ApiError('VALIDATION_FAILED', `No requirement with id "${id}".`);
+      }
+
+      draft.flashcards = Array.isArray(draft.flashcards) ? draft.flashcards : [];
+      const card = markManual(
+        {
+          id: nextIdFor('flashcard', draft.flashcards),
+          front: String(op.front ?? '').trim(),
+          back: String(op.back ?? '').trim(),
+          requirement_ids: requirementIds,
+        },
+        { updatedAt: stamp }
+      );
+
+      draft.flashcards.push(card);
+      return `added ${card.id}`;
+    }
+
+    case 'delete-flashcard': {
+      const cards = Array.isArray(draft.flashcards) ? draft.flashcards : [];
+      const index = cards.findIndex((entry) => entry.id === op.id);
+      if (index === -1) throw new ApiError('VALIDATION_FAILED', `No flashcard with id "${op.id}".`);
+      // Nothing references a flashcard — no schedule day, no coverage — so unlike a
+      // question there is nothing else to clean up.
+      cards.splice(index, 1);
+      return `deleted ${op.id}`;
     }
 
     case 'edit-brief': {
@@ -166,6 +221,12 @@ function findQuestion(draft, id) {
   const question = (draft.questions ?? []).find((entry) => entry.id === id);
   if (!question) throw new ApiError('VALIDATION_FAILED', `No question with id "${id}".`);
   return question;
+}
+
+function findFlashcard(draft, id) {
+  const card = (draft.flashcards ?? []).find((entry) => entry.id === id);
+  if (!card) throw new ApiError('VALIDATION_FAILED', `No flashcard with id "${id}".`);
+  return card;
 }
 
 /**
