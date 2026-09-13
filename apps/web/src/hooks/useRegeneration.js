@@ -33,7 +33,26 @@
 import { useCallback, useState } from 'react';
 
 import { kits } from '../lib/api.js';
+import { AppError, isStaleRevision } from '../lib/apiError.js';
 import { changesSince, describeTarget, summariseRegeneration, targetKey } from '../kits/regeneration.js';
+
+/**
+ * A regeneration or undo that lost a race. The server's own message names revision
+ * numbers, which are true and mean nothing to a person. By the time this is shown the
+ * editor has already adopted the latest kit, so the useful sentence is what happened and
+ * that trying again will work.
+ */
+function explain(error, verb) {
+  if (!isStaleRevision(error)) return error;
+  return new AppError({
+    code: error.code,
+    status: error.status,
+    currentRevision: error.currentRevision,
+    expectedRevision: error.expectedRevision,
+    kit: error.kit,
+    message: `This kit was changed somewhere else, so nothing was ${verb}. It now shows the latest version — try again.`,
+  });
+}
 
 const withoutSection = (map, section, sectionOfKey) =>
   Object.fromEntries(Object.entries(map).filter(([key, value]) => sectionOfKey(key, value) !== section));
@@ -66,7 +85,7 @@ export function useRegeneration(kitId, editor, { onError } = {}) {
         setAnnouncement(`Finished regenerating ${title}. ${summary.text}`);
       } catch (error) {
         setAnnouncement(`Could not regenerate ${title}.`);
-        onError?.(error);
+        onError?.(explain(error, 'regenerated'));
       } finally {
         setRunning(null);
       }
@@ -93,7 +112,7 @@ export function useRegeneration(kitId, editor, { onError } = {}) {
         // The server has nothing to restore — another tab undid it, or regenerated since.
         if (error?.code === 'NOTHING_TO_UNDO') setLatest((current) => withoutSection(current, target.section, (section) => section));
         setAnnouncement(`Could not undo the regeneration of ${title}.`);
-        onError?.(error);
+        onError?.(explain(error, 'undone'));
         return false;
       } finally {
         setRunning(null);

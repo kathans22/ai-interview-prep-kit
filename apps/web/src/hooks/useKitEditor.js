@@ -21,6 +21,12 @@
  * that were rolled back, and the builder shows it. A cancelled request is the one
  * exception, because that is a request this app chose to abandon.
  *
+ * A 409 IS NOT A FAILURE TO REPORT, IT IS A RACE TO RESOLVE. Another tab or device saved
+ * first. The conflict response carries the kit as it now stands, so the editor rebases —
+ * that kit becomes the base, this person's unconfirmed operations go back on top — sends
+ * again at once, and tells them quietly. Only if the kit keeps moving under three
+ * rebases in a row does it give up, roll back and say so, rather than loop.
+ *
  * SOME WRITES MUST NOT SHARE THE WIRE WITH EDITS. A regeneration moves the same revision
  * an edit does, so `exclusive` saves everything pending, stops sending while its task
  * runs — edits keep drawing on screen and wait — adopts the kit the task returns as the
@@ -32,7 +38,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { kits } from '../lib/api.js';
-import { isCancelled } from '../lib/apiError.js';
+import { isCancelled, isStaleRevision } from '../lib/apiError.js';
 import { currentValue } from '../kits/localOps.js';
 import {
   DEBOUNCE_MS,
@@ -46,13 +52,17 @@ import {
   nextReleaseAt,
   opKey,
   pendingKeys,
+  rebase,
   releaseAll,
   takeBatch,
   toServerOp,
   viewOf,
 } from '../kits/editQueue.js';
 
-export function useKitEditor(kitId, initialKit, { onError } = {}) {
+/** Rebases in a row before a conflict is treated as a failure. */
+const MAX_REBASES = 3;
+
+export function useKitEditor(kitId, initialKit, { onError, onRebase } = {}) {
   const [state, setState] = useState(() => createEditState(initialKit));
 
   // The latest state, readable from timers and async callbacks without a stale closure.
@@ -73,6 +83,9 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
   const claimed = useRef(false);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
+  const onRebaseRef = useRef(onRebase);
+  onRebaseRef.current = onRebase;
+  const rebasesInARow = useRef(0);
 
   // Callers awaiting an add, by temporary id. Settled when the request carrying that add
   // lands — resolved on success, rejected on failure — so a form knows whether to close.
@@ -143,20 +156,36 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
       markLanded = resolve;
     });
 
+    let resend = false;
+
     try {
       const response = await kits.edit(kitId, batch.map(toServerOp));
+      rebasesInARow.current = 0;
       set(confirm(stateRef.current, response.kit));
       settleWaiters(batch, 'resolve', response.kit);
     } catch (error) {
-      failures.current += 1;
-      set(fail(stateRef.current));
-      settleWaiters(batch, 'reject', error);
-      if (!isCancelled(error)) onErrorRef.current?.(error, batch);
+      if (isStaleRevision(error) && error.kit && rebasesInARow.current < MAX_REBASES) {
+        // Someone else saved first. Their kit becomes the base; this person's work goes
+        // back on top and is sent again straight away. The ledger already holds the new
+        // revision — `api.js` recorded it from the 409.
+        rebasesInARow.current += 1;
+        const { state: rebased, dropped } = rebase(stateRef.current, error.kit);
+        set(rebased);
+        onRebaseRef.current?.({ dropped });
+        resend = true;
+      } else {
+        rebasesInARow.current = 0;
+        failures.current += 1;
+        set(fail(stateRef.current));
+        settleWaiters(batch, 'reject', error);
+        if (!isCancelled(error)) onErrorRef.current?.(error, batch);
+      }
     } finally {
       sending.current = false;
       markLanded();
+      if (resend) flushRef.current();
       // Anything typed, or held, while that request was out goes next.
-      if (stateRef.current.queued.length > 0) schedule();
+      else if (stateRef.current.queued.length > 0) schedule();
     }
   }, [kitId, set, schedule]);
 
@@ -305,6 +334,11 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
         const response = await task(stateRef.current.base);
         if (response?.kit) set({ ...stateRef.current, base: response.kit });
         return response;
+      } catch (error) {
+        // Someone else changed the kit first, so nothing was regenerated. Show their kit —
+        // with this person's waiting edits still on top — so trying again starts from it.
+        if (isStaleRevision(error) && error.kit) set({ ...stateRef.current, base: error.kit });
+        throw error;
       } finally {
         exclusiveRef.current = false;
         claimed.current = false;

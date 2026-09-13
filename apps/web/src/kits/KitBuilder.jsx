@@ -39,6 +39,7 @@ import ConfirmDialog from '../ui/ConfirmDialog.jsx';
 import { useToast } from '../ui/ToastProvider.jsx';
 import { useKitEditor } from '../hooks/useKitEditor.js';
 import { useRegeneration } from '../hooks/useRegeneration.js';
+import { describeRebase } from './editQueue.js';
 import RegenerateDialog from './RegenerateDialog.jsx';
 import { describeTarget } from './regeneration.js';
 import BriefSection from './sections/BriefSection.jsx';
@@ -61,6 +62,8 @@ export default function KitBuilder({ kitId, kit: serverKit }) {
   const { show } = useToast();
   const editor = useKitEditor(kitId, serverKit, {
     onError: (error) => show(`${error.message} Your last change was undone.`, { tone: 'error' }),
+    // Quiet on purpose: nothing the person did was lost, and there is nothing to do.
+    onRebase: ({ dropped }) => show(describeRebase(dropped), { tone: 'info' }),
   });
   const regeneration = useRegeneration(kitId, editor, {
     onError: (error) => show(error.message, { tone: 'error' }),

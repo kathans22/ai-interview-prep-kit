@@ -218,6 +218,68 @@ export function fail(state) {
   return { base: state.base, inflight: [], queued: state.queued };
 }
 
+/** Operations aimed at one question or flashcard, and the list that item lives in. */
+const TARGETED = Object.freeze({
+  'edit-question': 'questions',
+  'delete-question': 'questions',
+  'move-category': 'questions',
+  'edit-flashcard': 'flashcards',
+  'delete-flashcard': 'flashcards',
+});
+
+function targetExists(kit, op) {
+  if (op?.type === 'pin') return currentPinned(kit, op.id) !== undefined;
+  const list = TARGETED[op?.type];
+  if (!list) return true;
+  return (Array.isArray(kit?.[list]) ? kit[list] : []).some((item) => item?.id === op.id);
+}
+
+/**
+ * Someone else saved first. Start again from their kit, with everything this person has
+ * not had confirmed put back on top of it.
+ *
+ * NOTHING IS RELOADED AND NOTHING THE PERSON DID IS LOST. The 409 carries the kit as it
+ * now stands. `base` becomes that kit; the operations that were on the wire go back in
+ * front of those still waiting, in the order they were made; and they are sent again.
+ * Where the other writer changed the same field, this person's text wins — it is the
+ * text on their screen, and the brief asks for exactly that. A later edit to a field
+ * that was on the wire replaces the earlier one, as it would have while waiting.
+ *
+ * NOTHING WAS HALF-APPLIED. The edit route checks the revision before it writes, so a
+ * 409 means none of the request landed, and resending an add cannot duplicate it.
+ *
+ * AN OPERATION WITH NOTHING LEFT TO CHANGE IS DROPPED, AND REPORTED. An edit, pin, move or
+ * delete aimed at a question or flashcard the other writer deleted could only earn a 400,
+ * and a 400 rolls back everything sent with it. Adds, brief edits and reorders are never
+ * dropped: an add needs no target, the brief always exists, and a reorder's list is
+ * rebuilt against the new kit when it is sent. A held delete keeps its undo window.
+ *
+ * @returns {{ state: object, dropped: object[] }}
+ */
+export function rebase(state, serverKit) {
+  const kit = serverKit ?? state.base;
+  const dropped = [];
+  let next = { base: kit, inflight: [], queued: [] };
+
+  for (const op of [...state.inflight, ...state.queued]) {
+    if (!targetExists(kit, op)) {
+      dropped.push(op);
+      continue;
+    }
+    next = enqueue(next, op);
+  }
+  return { state: next, dropped };
+}
+
+/** The quiet notice after a rebase: what happened, and anything that could not survive it. */
+export function describeRebase(dropped = []) {
+  const reapplied = 'This kit was changed somewhere else, so your changes were reapplied on top of the latest version.';
+  const ids = [...new Set(dropped.map((op) => op?.id).filter(Boolean))];
+  if (ids.length === 0) return reapplied;
+  if (ids.length === 1) return `${reapplied} Your change to ${ids[0]} was not, because it was deleted there.`;
+  return `${reapplied} Your changes to ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)} were not, because they were deleted there.`;
+}
+
 /** Drop a waiting operation by key — Escape on an unsent edit, or undo on a held delete. */
 export function cancel(state, key) {
   return { ...state, queued: state.queued.filter((op) => opKey(op) !== key) };
