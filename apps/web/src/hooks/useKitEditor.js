@@ -52,6 +52,21 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
+  // Callers awaiting an add, by temporary id. Settled when the request carrying that add
+  // lands — resolved on success, rejected on failure — so a form knows whether to close.
+  const waiters = useRef(new Map());
+  const addCounter = useRef(0);
+
+  const settleWaiters = (batch, outcome, value) => {
+    for (const op of batch) {
+      if (!op.tempId) continue;
+      const waiter = waiters.current.get(op.tempId);
+      if (!waiter) continue;
+      waiters.current.delete(op.tempId);
+      waiter[outcome](value);
+    }
+  };
+
   // A different kit on the same component instance starts from that kit's data. Edits
   // belonging to the previous kit were flushed by the unmount-style cleanup below.
   const seenKitId = useRef(kitId);
@@ -82,8 +97,10 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     try {
       const response = await kits.edit(kitId, batch.map(toServerOp));
       set(confirm(stateRef.current, response.kit));
+      settleWaiters(batch, 'resolve', response.kit);
     } catch (error) {
       set(fail(stateRef.current));
+      settleWaiters(batch, 'reject', error);
       if (!isCancelled(error)) onErrorRef.current?.(error, batch);
     } finally {
       sending.current = false;
@@ -103,6 +120,28 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
       clearTimeout(timer.current);
       timer.current = setTimeout(() => flushRef.current(), DEBOUNCE_MS);
     },
+    [set]
+  );
+
+  /**
+   * Add a question or a flashcard. Resolves with the server's kit once it is saved;
+   * rejects if the save fails, which the editor has already reported.
+   *
+   * SENT AT ONCE, NOT AFTER THE DEBOUNCE. The debounce exists to merge keystrokes into
+   * one edit. An add is one deliberate action with nothing to merge, and until it lands
+   * the new row is read-only — so every millisecond of delay is a millisecond the person
+   * cannot touch what they just made. Anything already waiting goes out with it, which
+   * only ever sends an edit sooner.
+   */
+  const add = useCallback(
+    (op) =>
+      new Promise((resolve, reject) => {
+        addCounter.current += 1;
+        const tempId = op.tempId ?? `pending-${addCounter.current}`;
+        waiters.current.set(tempId, { resolve, reject });
+        set(enqueue(stateRef.current, { ...op, tempId }));
+        flushRef.current();
+      }),
     [set]
   );
 
@@ -152,5 +191,5 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     [keys]
   );
 
-  return { kit, edit, revert, statusOf, flush: () => flushRef.current() };
+  return { kit, edit, add, revert, statusOf, flush: () => flushRef.current() };
 }

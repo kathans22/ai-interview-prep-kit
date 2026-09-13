@@ -119,9 +119,19 @@ export function pendingKeys(state) {
   };
 }
 
-/** The operation as the server's edit route expects it. */
+/**
+ * The operation as the server's edit route expects it.
+ *
+ * An add's temporary id is stripped here. It exists only so the preview can draw a stable
+ * row; the server assigns the real id, and a temporary one reaching it would be a field
+ * the route does not accept.
+ */
 export function toServerOp(op) {
   if (op.type === 'edit-brief') return { type: 'edit-brief', [op.field]: op.value };
   if (EDIT_FIELDS[op.type]) return { type: op.type, id: op.id, [op.field]: op.value };
+  if (op.type === 'add-question' || op.type === 'add-flashcard') {
+    const { tempId, ...rest } = op;
+    return rest;
+  }
   return op;
 }

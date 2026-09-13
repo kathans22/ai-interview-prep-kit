@@ -2,21 +2,37 @@
  * QuestionsSection.jsx — the question bank, grouped by category, editable in place.
  *
  * Decides: how questions are grouped and laid out, that every category is shown —
- * including an empty one — and which parts of a question can be edited here.
+ * including an empty one — and which parts of a question can be edited or added here.
  *
  * Does NOT decide: which category a question belongs in, how hard it is, or how an edit
  * is saved. Grouping is `groupQuestions`; saving is the editor passed in.
  *
+ * EVERY CATEGORY IS ALWAYS RENDERED, WITH ITS OWN ADD BUTTON. A section-wide empty state
+ * would replace the groups — and with them the only way to add a question to an empty
+ * kit. So there is no section-level empty state here; each empty group says so and
+ * offers to add.
+ *
+ * A QUESTION BEING ADDED IS READ-ONLY UNTIL IT IS SAVED. Until the server confirms it,
+ * it has only a temporary id, and an edit aimed at that id would reach the server as an
+ * id it has never heard of. The row says "Adding…" rather than offering controls that
+ * would fail.
+ *
+ * FOCUS RETURNS TO THE ADD BUTTON when the form closes, whether it was cancelled or the
+ * question was saved — otherwise it drops to the top of the page and a keyboard user has
+ * to find their place again.
+ *
  * THE ANSWER OUTLINE IS BEHIND A DISCLOSURE. Twenty-odd questions each with a paragraph
- * of outline is a wall at 360px; the prompts are what someone scans to decide what to
- * study, and the outline is one tap away. A native `<details>` is used because it is
- * keyboard-operable and announced correctly without any code of our own. It is shown
- * even when the outline is empty, so an empty one can be written.
+ * of outline is a wall at 360px. A native `<details>` is keyboard-operable and announced
+ * correctly without any code of our own. It is shown even when the outline is empty, so
+ * an empty one can be written.
  */
 
+import { useRef, useState } from 'react';
+
+import { buttonClasses } from '../../ui/Button.jsx';
 import Card from '../../ui/Card.jsx';
-import EmptyState from '../../ui/EmptyState.jsx';
 import SectionState from '../../ui/SectionState.jsx';
+import AddQuestionForm from '../AddQuestionForm.jsx';
 import EditableText from '../EditableText.jsx';
 import { DIFFICULTY_LABELS, deriveSectionState, groupQuestions, indexRequirements } from '../kitView.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
@@ -29,7 +45,18 @@ export default function QuestionsSection({ kit, editor }) {
   const present = Array.isArray(questions);
   const groups = groupQuestions(questions);
   const requirements = indexRequirements(kit?.role?.requirements);
-  const state = deriveSectionState({ present, isEmpty: present && questions.length === 0 });
+  const state = deriveSectionState({ present });
+
+  const [adding, setAdding] = useState(null);
+  const addButtons = useRef({});
+  const focusAddButton = (category) => requestAnimationFrame(() => addButtons.current[category]?.focus());
+
+  async function submitQuestion(op) {
+    // Rejects on failure, which leaves the form open with the text still in it.
+    await editor.add(op);
+    setAdding(null);
+    focusAddButton(op.category);
+  }
 
   /** Props that make one question field editable through the shared editor. */
   const editable = (question, field, label) => {
@@ -45,17 +72,7 @@ export default function QuestionsSection({ kit, editor }) {
 
   return (
     <Card title={`Question bank${present ? ` (${questions.length})` : ''}`} titleAs="h2">
-      <SectionState
-        status={state.status}
-        error={state.error}
-        isEmpty={state.isEmpty}
-        empty={
-          <EmptyState
-            title="No questions yet"
-            description="This kit has no questions. Add one by hand, or regenerate a category."
-          />
-        }
-      >
+      <SectionState status={state.status} error={state.error}>
         <div className="space-y-6">
           {groups.map((group) => (
             <section key={group.category} aria-labelledby={`questions-${group.category}`}>
@@ -67,40 +84,76 @@ export default function QuestionsSection({ kit, editor }) {
                 <p className="mt-2 text-sm text-slate-500">No {group.label.toLowerCase()} questions yet.</p>
               ) : (
                 <ol className="mt-2 space-y-2">
-                  {group.questions.map((question) => (
-                    <li key={question.id} className="rounded-md border border-slate-200 p-3">
-                      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                        <span className="font-mono">{question.id}</span>
-                        <span>{DIFFICULTY_LABELS[question.difficulty] ?? `Difficulty ${question.difficulty}`}</span>
-                        <ProvenanceBadges item={question} />
-                      </div>
-
-                      <EditableText className="mt-1" rows={3} {...editable(question, 'prompt', 'prompt')}>
-                        <p className="whitespace-pre-line break-words text-sm font-medium text-slate-900">
-                          {question.prompt || <span className="font-normal text-slate-500">No prompt yet.</span>}
+                  {group.questions.map((question) =>
+                    question.pendingAdd ? (
+                      <li key={question.id} className="rounded-md border border-dashed border-slate-300 p-3">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span>Adding…</span>
+                          <ProvenanceBadges item={question} />
+                        </div>
+                        <p className="mt-1 whitespace-pre-line break-words text-sm font-medium text-slate-700">
+                          {question.prompt}
                         </p>
-                      </EditableText>
+                      </li>
+                    ) : (
+                      <li key={question.id} className="rounded-md border border-slate-200 p-3">
+                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span className="font-mono">{question.id}</span>
+                          <span>{DIFFICULTY_LABELS[question.difficulty] ?? `Difficulty ${question.difficulty}`}</span>
+                          <ProvenanceBadges item={question} />
+                        </div>
 
-                      {(question.requirement_ids ?? []).length > 0 ? (
-                        <p className="mt-1 break-words text-xs text-slate-500">
-                          For:{' '}
-                          {question.requirement_ids
-                            .map((id) => requirements.get(id)?.text ?? id)
-                            .join(' · ')}
-                        </p>
-                      ) : null}
-
-                      <details className="mt-2">
-                        <summary className="cursor-pointer text-sm text-slate-700">What a strong answer covers</summary>
-                        <EditableText className="mt-1" rows={5} {...editable(question, 'answer_outline', 'answer outline')}>
-                          <p className="whitespace-pre-line break-words text-sm text-slate-700">
-                            {question.answer_outline || <span className="text-slate-500">No outline yet.</span>}
+                        <EditableText className="mt-1" rows={3} {...editable(question, 'prompt', 'prompt')}>
+                          <p className="whitespace-pre-line break-words text-sm font-medium text-slate-900">
+                            {question.prompt || <span className="font-normal text-slate-500">No prompt yet.</span>}
                           </p>
                         </EditableText>
-                      </details>
-                    </li>
-                  ))}
+
+                        {(question.requirement_ids ?? []).length > 0 ? (
+                          <p className="mt-1 break-words text-xs text-slate-500">
+                            For:{' '}
+                            {question.requirement_ids
+                              .map((id) => requirements.get(id)?.text ?? id)
+                              .join(' · ')}
+                          </p>
+                        ) : null}
+
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-sm text-slate-700">What a strong answer covers</summary>
+                          <EditableText className="mt-1" rows={5} {...editable(question, 'answer_outline', 'answer outline')}>
+                            <p className="whitespace-pre-line break-words text-sm text-slate-700">
+                              {question.answer_outline || <span className="text-slate-500">No outline yet.</span>}
+                            </p>
+                          </EditableText>
+                        </details>
+                      </li>
+                    )
+                  )}
                 </ol>
+              )}
+
+              {adding === group.category ? (
+                <AddQuestionForm
+                  category={group.category}
+                  categoryLabel={group.label}
+                  requirements={kit?.role?.requirements ?? []}
+                  onSubmit={submitQuestion}
+                  onCancel={() => {
+                    setAdding(null);
+                    focusAddButton(group.category);
+                  }}
+                />
+              ) : (
+                <button
+                  ref={(node) => {
+                    addButtons.current[group.category] = node;
+                  }}
+                  type="button"
+                  onClick={() => setAdding(group.category)}
+                  className={buttonClasses({ variant: 'secondary', size: 'sm', className: 'mt-2' })}
+                >
+                  Add a {group.label.toLowerCase()} question
+                </button>
               )}
             </section>
           ))}

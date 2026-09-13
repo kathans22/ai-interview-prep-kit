@@ -183,6 +183,60 @@ test('pending keys say which fields are saving and which are waiting', () => {
   assert.equal(keys.queued.has(opKey(editPrompt('q2', ''))), true);
 });
 
+// --- adding by hand ---------------------------------------------------------
+
+const addQuestion = {
+  type: 'add-question',
+  tempId: 'pending-1',
+  category: 'behavioural',
+  prompt: 'Tell me about a disagreement.',
+  answer_outline: 'Evidence, outcome.',
+  difficulty: 3,
+  requirement_ids: ['r6'],
+};
+
+test('an added question is drawn at once, marked manual and pending, and the kit is untouched', () => {
+  const view = applyLocalOps(KIT, [addQuestion]);
+  const added = view.questions.at(-1);
+
+  assert.equal(view.questions.length, 3);
+  assert.equal(added.id, 'pending-1');
+  assert.equal(added.origin, 'manual', 'the brief requires hand-added items to be manual');
+  assert.equal(added.pendingAdd, true, 'read-only until the server gives it a real id');
+  assert.equal(KIT.questions.length, 2);
+});
+
+test('an added flashcard is drawn the same way', () => {
+  const view = applyLocalOps(KIT, [
+    { type: 'add-flashcard', tempId: 'pending-2', front: 'Q', back: 'A', requirement_ids: [] },
+  ]);
+  const added = view.flashcards.at(-1);
+  assert.equal(added.origin, 'manual');
+  assert.equal(added.pendingAdd, true);
+});
+
+test('the preview never duplicates an add, however often it is recomputed', () => {
+  const view = applyLocalOps(KIT, [addQuestion, addQuestion]);
+  assert.equal(view.questions.filter((q) => q.id === 'pending-1').length, 1);
+});
+
+test('an add is never mistaken for a no-op, and its temporary id never reaches the server', () => {
+  assert.equal(isNoop(addQuestion, KIT), false);
+
+  const serverOp = toServerOp(addQuestion);
+  assert.equal('tempId' in serverOp, false);
+  assert.deepEqual(Object.keys(serverOp).sort(), ['answer_outline', 'category', 'difficulty', 'prompt', 'requirement_ids', 'type']);
+});
+
+test('a failed add rolls back its pending row', () => {
+  let state = enqueue(createEditState(KIT), addQuestion);
+  ({ state } = takeBatch(state));
+  assert.equal(viewOf(state).questions.length, 3);
+
+  state = fail(state);
+  assert.equal(viewOf(state).questions.length, 2);
+});
+
 test('operations are translated into exactly what the edit route accepts', () => {
   assert.deepEqual(toServerOp(editPrompt('q1', 'x')), { type: 'edit-question', id: 'q1', prompt: 'x' });
   assert.deepEqual(toServerOp({ type: 'edit-flashcard', id: 'f1', field: 'back', value: 'y' }), {

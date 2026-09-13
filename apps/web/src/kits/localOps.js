@@ -77,6 +77,45 @@ export function applyLocalOp(draft, op) {
       return draft;
     }
 
+    // An added item is drawn at once under a TEMPORARY id carried on the operation, so it
+    // is stable however often the preview is recomputed. It is marked `pendingAdd` so the
+    // screen renders it read-only: an edit aimed at a temporary id would reach the server
+    // as an id it has never heard of. When the add confirms, the server's kit replaces the
+    // base and the real item — with its real id — takes the temporary one's place.
+    case 'add-question': {
+      draft.questions = Array.isArray(draft.questions) ? draft.questions : [];
+      if (!findById(draft.questions, op.tempId)) {
+        draft.questions.push({
+          id: op.tempId,
+          requirement_ids: op.requirement_ids ?? [],
+          category: op.category,
+          prompt: op.prompt ?? '',
+          answer_outline: op.answer_outline ?? '',
+          difficulty: op.difficulty ?? 2,
+          origin: 'manual',
+          pinned: false,
+          pendingAdd: true,
+        });
+      }
+      return draft;
+    }
+
+    case 'add-flashcard': {
+      draft.flashcards = Array.isArray(draft.flashcards) ? draft.flashcards : [];
+      if (!findById(draft.flashcards, op.tempId)) {
+        draft.flashcards.push({
+          id: op.tempId,
+          front: op.front ?? '',
+          back: op.back ?? '',
+          requirement_ids: op.requirement_ids ?? [],
+          origin: 'manual',
+          pinned: false,
+          pendingAdd: true,
+        });
+      }
+      return draft;
+    }
+
     default:
       return draft;
   }
