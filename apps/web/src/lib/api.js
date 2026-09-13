@@ -301,11 +301,16 @@ export const kits = {
 // --- practice ---------------------------------------------------------------
 
 export const practice = {
-  /** Ratings take no revision: recording that you practised cannot conflict. */
-  record: (id, { questionId, confidence, note = '' }) =>
+  /**
+   * Record one rating. A flashcard is rated by `cardId` (1–4: again, hard, good, easy); a
+   * question by `questionId` (1–5). Only the id given is sent — the server refuses a
+   * rating about two things. Ratings take no revision: recording that you practised
+   * cannot conflict.
+   */
+  record: (id, { cardId, questionId, confidence, note = '' }) =>
     request(`/api/kits/${encodeURIComponent(id)}/practice`, {
       method: 'POST',
-      body: { questionId, confidence, note },
+      body: cardId ? { cardId, confidence, note } : { questionId, confidence, note },
     }),
 
   history: (id, signal) => request(`/api/kits/${encodeURIComponent(id)}/practice`, { signal }),

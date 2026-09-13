@@ -107,12 +107,18 @@ export function useDeleteKit() {
   return { ...rest, remove: run };
 }
 
-/** This kit's practice history, weakest question first. */
+/** This kit's practice history: the log, a summary per card, and one per question, weakest first. */
 export function usePracticeHistory(id) {
   const task = useCallback((signal) => practice.history(id, signal), [id]);
   const { data, ...rest } = useAsync(task, { deps: [id], immediate: Boolean(id) });
 
-  return { ...rest, total: data?.total ?? 0, entries: data?.entries ?? [], questions: data?.questions ?? [] };
+  return {
+    ...rest,
+    total: data?.total ?? 0,
+    entries: data?.entries ?? [],
+    cards: data?.cards ?? [],
+    questions: data?.questions ?? [],
+  };
 }
 
 /** Record one confidence rating. Append-only on the server; no revision, no conflict. */

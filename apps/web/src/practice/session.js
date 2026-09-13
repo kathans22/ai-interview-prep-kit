@@ -1,11 +1,13 @@
 /**
- * session.js — one practice session: which card is showing, and whether its answer is.
+ * session.js — one practice session: which card is showing, whether its answer is, and
+ * what the person said about each card they rated.
  *
- * Decides: the cards a session walks and in what order it walks them, where it is, and
- * that an answer is hidden until asked for — and hidden again on every move.
+ * Decides: the cards a session walks and in what order it walks them, where it is, that
+ * an answer is hidden until asked for — and hidden again on every move — and the state of
+ * each rating made in this session.
  *
  * Does NOT decide: which order is best (that is the server's, weakest first, once ratings
- * exist), what a rating means, or how any of it is drawn.
+ * exist), what a rating means, how a rating reaches the server, or how any of it is drawn.
  *
  * PURE, SO THE RULES CAN BE TESTED WITHOUT A BROWSER. The screen is a thin reader of this
  * state; every move is a function from one session to the next.
@@ -16,12 +18,17 @@
  *
  * MOVES STOP AT THE ENDS rather than wrapping. Wrapping from the last card to the first
  * would quietly start the session again, which is a decision the person should make.
+ *
+ * A RATING IS DRAWN AT ONCE, THEN SETTLED. It is marked `saving` the moment it is chosen,
+ * so practice never waits on the network, and becomes `saved` or `failed` when the server
+ * answers. A later rating of the same card supersedes an earlier one still in flight, and
+ * the earlier answer must not overwrite it.
  */
 
 /** A session over these card ids, in this order. Duplicates and blanks are dropped. */
 export function createSession(cardIds) {
   const order = [...new Set((Array.isArray(cardIds) ? cardIds : []).filter(Boolean))];
-  return { order, index: 0, revealed: false };
+  return { order, index: 0, revealed: false, ratings: {} };
 }
 
 export const currentCardId = (session) => session.order[session.index] ?? null;
@@ -49,4 +56,36 @@ export const previous = (session) => move(session, -1);
 export function describePosition(session) {
   if (session.order.length === 0) return 'No cards';
   return `Card ${session.index + 1} of ${session.order.length}`;
+}
+
+/** This session's rating of a card: `{ value, status }`, or null if it has none. */
+export const ratingOf = (session, cardId) => session.ratings?.[cardId] ?? null;
+
+/** Record a rating for a card in this session, marked `saving`. Unknown cards are ignored. */
+export function rate(session, cardId, value) {
+  if (!session.order.includes(cardId)) return session;
+  return { ...session, ratings: { ...session.ratings, [cardId]: { value, status: 'saving' } } };
+}
+
+/**
+ * Rate the current card and move on, unless it is the last. On the last card the rating
+ * stays in view, because moving nowhere would leave the person looking at a card with no
+ * sign that anything happened.
+ */
+export function rateAndAdvance(session, value) {
+  const cardId = currentCardId(session);
+  if (!cardId) return session;
+  const rated = rate(session, cardId, value);
+  return isLast(rated) ? rated : next(rated);
+}
+
+/**
+ * The server answered for a rating. Marks it `saved` or `failed` — but only if it is still
+ * the rating waiting: a newer choice for the same card is not overwritten by an older
+ * answer.
+ */
+export function settleRating(session, cardId, value, status) {
+  const current = ratingOf(session, cardId);
+  if (!current || current.value !== value || current.status !== 'saving') return session;
+  return { ...session, ratings: { ...session.ratings, [cardId]: { value, status } } };
 }

@@ -12,6 +12,13 @@
  * NO CARDS IS NOT A DEAD END. A kit can have no flashcards — the time governor may drop
  * them, or they were deleted — and the empty state says so and points to the kit, where
  * a card can be added by hand.
+ *
+ * HISTORY IS A NICETY, PRACTICE IS NOT. The practice log is read alongside the kit so a
+ * card can say how it went last time; if that read fails, practising still works and the
+ * cards simply say nothing about the past.
+ *
+ * A RATING THAT IS NOT SAVED IS SAID OUT LOUD, here, once, with the server's reason — and
+ * the stepper marks the card so the person can choose again.
  */
 
 import { Link, useParams } from 'react-router-dom';
@@ -20,16 +27,27 @@ import { buttonClasses } from '../ui/Button.jsx';
 import Card from '../ui/Card.jsx';
 import EmptyState from '../ui/EmptyState.jsx';
 import SectionState from '../ui/SectionState.jsx';
-import { useKit } from '../hooks/useKits.js';
+import { useToast } from '../ui/ToastProvider.jsx';
+import { useKit, usePracticeHistory, useRecordPractice } from '../hooks/useKits.js';
 import FlashcardStepper from '../practice/FlashcardStepper.jsx';
 
 export default function PracticePage() {
   const { id } = useParams();
   const { kit, status, requestStatus, error, reload } = useKit(id);
+  const practiceHistory = usePracticeHistory(id);
+  const { record } = useRecordPractice(id);
+  const { show } = useToast();
 
   const kitHref = `/kits/${encodeURIComponent(id)}`;
   const ready = status === 'ready' && Boolean(kit);
   const cards = ready && Array.isArray(kit.flashcards) ? kit.flashcards : [];
+  const history = new Map(practiceHistory.cards.map((summary) => [summary.id, summary]));
+
+  const rateCard = (cardId, confidence) =>
+    record({ cardId, confidence }).catch((thrown) => {
+      show(`Your rating for ${cardId} was not saved. ${thrown.message}`, { tone: 'error' });
+      throw thrown;
+    });
 
   return (
     <section>
@@ -62,7 +80,13 @@ export default function PracticePage() {
           }
         >
           {ready ? (
-            <FlashcardStepper key={id} cards={cards} requirements={kit.role?.requirements ?? []} />
+            <FlashcardStepper
+              key={id}
+              cards={cards}
+              requirements={kit.role?.requirements ?? []}
+              history={history}
+              onRate={rateCard}
+            />
           ) : (
             <Card title="This kit is not ready to practise yet" titleAs="h2">
               <p className="text-sm text-slate-700">
