@@ -9,6 +9,7 @@ import {
   RECENCY_HALF_LIFE_MS,
   RECENCY_PUSH_MAX,
   UNSEEN_PRIORITY,
+  WEAK_BOOST,
   latestRatings,
   orderCards,
   recencyPush,
@@ -126,3 +127,62 @@ test('no cards, or no ratings, is an ordinary answer rather than an error', () =
   assert.deepEqual(orderCards(), []);
   assert.deepEqual(ids(orderCards({ cards: cards('f1', 'f2'), ratings: undefined, now: NOW })), ['f1', 'f2']);
 });
+
+// --- weak spots: cards covering a requirement a scored answer missed come back first ---
+
+const cardWith = (id, requirementIds) => ({ id, front: `front ${id}`, back: `back ${id}`, requirement_ids: requirementIds });
+
+test('WEAK_BOOST is under one rating step, like the recency push', () => {
+  assert.ok(WEAK_BOOST > 0 && WEAK_BOOST < 1, 'a weak pull must never carry a card past a whole rating');
+});
+
+test('a card covering a missed requirement is pulled forward — past unseen, never past a hard rating', () => {
+  const deck = [cardWith('goodWeak', ['r1']), cardWith('unseen', ['r9']), cardWith('hardPlain', ['r9'])];
+  const ordered = orderCards({
+    cards: deck,
+    ratings: [rating('goodWeak', 3, DAY), rating('hardPlain', 2, DAY)],
+    now: NOW,
+    weakRequirements: ['r1'],
+  });
+
+  assert.deepEqual(ids(ordered), ['hardPlain', 'goodWeak', 'unseen']);
+  assert.equal(ordered.find((card) => card.id === 'goodWeak').weak, true);
+  assert.equal(ordered.find((card) => card.id === 'hardPlain').weak, false);
+});
+
+test('without weak requirements the order is exactly what it was — the boost changes nothing by default', () => {
+  const deck = [cardWith('f1', ['r1']), cardWith('f2', [])];
+  const withNone = orderCards({ cards: deck, ratings: [rating('f1', 3, DAY)], now: NOW });
+  // The recency push after a day is float dust (~2.7e-15), not zero — compare with slack.
+  assert.ok(Math.abs(withNone.find((card) => card.id === 'f1').priority - 3) < 1e-9, 'no boost applied');
+  assert.equal(withNone.find((card) => card.id === 'f2').priority, UNSEEN_PRIORITY);
+  assert.deepEqual(withNone.map((card) => card.weak), [false, false]);
+});
+
+test('the boost cannot override what the person actually said: an again card keeps its lead', () => {
+  const deck = [cardWith('againWeak', ['r1']), cardWith('goodWeak', ['r2'])];
+  const ordered = orderCards({
+    cards: deck,
+    ratings: [rating('againWeak', 1, DAY), rating('goodWeak', 3, DAY)],
+    now: NOW,
+    weakRequirements: ['r1', 'r2'],
+  });
+
+  // again 1 − 0.6 = 0.4; good 3 − 0.6 = 2.4 — the rating still decides.
+  assert.deepEqual(ids(ordered), ['againWeak', 'goodWeak']);
+});
+
+test('unseen cards covering a weak requirement surface ahead of the other unseen cards', () => {
+  const deck = [cardWith('unseenPlain', ['r9']), cardWith('unseenWeak', ['r1'])];
+  const ordered = orderCards({ cards: deck, ratings: [], now: NOW, weakRequirements: ['r1'] });
+
+  assert.deepEqual(ids(ordered), ['unseenWeak', 'unseenPlain']);
+  assert.equal(ordered[0].seen, false, 'it is still unseen — the boost moved it, not a rating');
+});
+
+test('weak ids the deck does not cover, or malformed input, change nothing', () => {
+  const deck = [cardWith('f1', ['r1'])];
+  assert.equal(orderCards({ cards: deck, ratings: [], now: NOW, weakRequirements: ['zzz'] })[0].priority, UNSEEN_PRIORITY);
+  assert.equal(orderCards({ cards: deck, ratings: [], now: NOW, weakRequirements: 'not a list' })[0].priority, UNSEEN_PRIORITY);
+});
+
