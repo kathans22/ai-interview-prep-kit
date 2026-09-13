@@ -165,21 +165,47 @@ export function validateRegenerate(body, { sections, categories }) {
   return { section, category: category || null, revision: validateRevision(body.revision) };
 }
 
-/** The body of POST /api/kits/:id/practice. */
+/** A flashcard is rated again (1), hard (2), good (3) or easy (4). */
+export const CARD_CONFIDENCE_MAX = 4;
+
+/** A question keeps the scale it was given in Stage 9. */
+export const QUESTION_CONFIDENCE_MAX = 5;
+
+/**
+ * The body of POST /api/kits/:id/practice.
+ *
+ * A rating is about exactly ONE thing: a flashcard (`cardId`) or a question
+ * (`questionId`). Both, or neither, is a client that has lost track of what it is rating,
+ * and guessing which it meant would file the rating against the wrong item.
+ *
+ * THE TWO SCALES DIFFER ON PURPOSE. A flashcard's four answers — again, hard, good, easy —
+ * are four buttons, and stretching them over the question scale's five numbers would
+ * invent a rating nobody can give. The question scale is unchanged so ratings already
+ * recorded keep their meaning.
+ */
 export function validatePractice(body) {
   const check = createChecker();
   if (!isPlainObject(body)) throw new ApiError('VALIDATION_FAILED', 'Request body must be a JSON object.');
 
   const questionId = str(body.questionId);
+  const cardId = str(body.cardId);
   const { confidence } = body;
 
-  if (!questionId) check.fail('questionId', 'is required.');
-  if (!Number.isInteger(confidence) || confidence < 1 || confidence > 5) {
-    check.fail('confidence', 'must be a whole number from 1 to 5.');
+  if (!questionId && !cardId) check.fail('cardId', 'or questionId is required.');
+  if (questionId && cardId) check.fail('cardId', 'and questionId cannot both be given — a rating is about one thing.');
+
+  const max = cardId ? CARD_CONFIDENCE_MAX : QUESTION_CONFIDENCE_MAX;
+  if (!Number.isInteger(confidence) || confidence < 1 || confidence > max) {
+    check.fail('confidence', `must be a whole number from 1 to ${max}.`);
   }
 
   check.done();
-  return { questionId, confidence, note: str(body.note) ?? '' };
+  return {
+    questionId: cardId ? null : questionId,
+    cardId: cardId ?? null,
+    confidence,
+    note: str(body.note) ?? '',
+  };
 }
 
 /**

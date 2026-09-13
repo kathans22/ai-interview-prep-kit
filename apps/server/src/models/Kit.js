@@ -89,7 +89,12 @@ const progressSchema = new mongoose.Schema(
  */
 const practiceSchema = new mongoose.Schema(
   {
-    questionId: { type: String, required: true },
+    // Exactly one of these two is set, and the route guarantees it (`validatePractice`).
+    // `cardId` has to be DECLARED here: a flashcard rating pushed with an undeclared field
+    // and a required `questionId` would be refused, or stripped to nothing, on MongoDB —
+    // the same silent loss this schema's absence once caused.
+    questionId: { type: String },
+    cardId: { type: String },
     confidence: { type: Number, required: true, min: 1, max: 5 },
     note: { type: String, default: '' },
     at: { type: Date, default: () => new Date() },

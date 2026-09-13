@@ -241,6 +241,22 @@ function contractFor(name, makeStore, { setUp = async () => {}, tearDown = async
       assert.equal(after.practice[1].confidence, 5);
     });
 
+    test('A FLASHCARD RATING PERSISTS WITH ITS cardId — and without a questionId', async () => {
+      const user = await store.users.create({ email: 'card-rating@example.com', passwordHash: 'h' });
+      const kit = await store.kits.create({ userId: user.id, input: INPUT, jdHash: 'card-rating' });
+
+      const after = await store.kits.write({
+        kitId: kit.id,
+        push: { practice: { cardId: 'f1', confidence: 1, note: '', at: new Date() } },
+      });
+
+      // The same silent-loss trap as above, one field over: an undeclared `cardId` is
+      // stripped by a strict schema, and a required `questionId` refuses the write.
+      assert.equal(after.practice.length, 1, 'the card rating was stored');
+      assert.equal(after.practice[0].cardId, 'f1', 'and kept the card it is about');
+      assert.equal(after.practice[0].confidence, 1);
+    });
+
     test('the duplicate lookup honours hash, owner, status and window', async () => {
       const user = await store.users.create({ email: 'dupe@example.com', passwordHash: 'h' });
       const other = await store.users.create({ email: 'other@example.com', passwordHash: 'h' });

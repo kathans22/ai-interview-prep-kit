@@ -1192,6 +1192,57 @@ test('practice ratings are recorded beside the kit, not inside it', async () => 
   assert.equal(kit.body.kit.questions.find((entry) => entry.id === 'q1').prompt, 'original technical');
 });
 
+test('a flashcard is rated on its own four-point scale, and summarised per card', async () => {
+  const alice = client();
+  await alice.signUp('card-practice@example.com');
+  const kitId = await giveKitTo('card-practice@example.com');
+  await store.kits.write({ kitId, set: { 'kit.flashcards': [generatedCard('f1', 'r1'), generatedCard('f2', 'r2')] } });
+  const rate = (body) => alice.call(`/api/kits/${kitId}/practice`, { method: 'POST', body: JSON.stringify(body) });
+
+  const first = await rate({ cardId: 'f1', confidence: 1 });
+  assert.equal(first.status, 201, JSON.stringify(first.body));
+  assert.equal(first.body.recorded.cardId, 'f1');
+  assert.equal(first.body.recorded.questionId, undefined, 'a card rating is not also a question rating');
+
+  const second = await rate({ cardId: 'f1', confidence: 4 });
+  assert.deepEqual(
+    [second.body.card.attempts, second.body.card.first, second.body.card.latest],
+    [2, 1, 4],
+    'again first, then easy: the trend is kept, not overwritten'
+  );
+  assert.ok(second.body.card.lastAt);
+
+  const log = await alice.call(`/api/kits/${kitId}/practice`);
+  assert.equal(log.body.total, 2);
+  assert.deepEqual(log.body.cards.map((card) => [card.id, card.attempts, card.latest]), [['f1', 2, 4]]);
+  assert.deepEqual(log.body.questions, []);
+});
+
+test('a card rating outside again..easy, for a missing card, or about two things at once is refused', async () => {
+  const alice = client();
+  await alice.signUp('card-practice-bad@example.com');
+  const kitId = await giveKitTo('card-practice-bad@example.com');
+  await store.kits.write({ kitId, set: { 'kit.flashcards': [generatedCard('f1', 'r1')] } });
+  const rate = (body) => alice.call(`/api/kits/${kitId}/practice`, { method: 'POST', body: JSON.stringify(body) });
+
+  for (const [body, why] of [
+    [{ cardId: 'f1', confidence: 5 }, 'five is not one of the four card answers'],
+    [{ cardId: 'f1', confidence: 0 }, 'below again'],
+    [{ cardId: 'f1', confidence: 2.5 }, 'not a whole answer'],
+    [{ cardId: 'f9', confidence: 2 }, 'no such card in this kit'],
+    [{ cardId: 'f1', questionId: 'q1', confidence: 2 }, 'a rating is about one thing'],
+    [{ confidence: 2 }, 'about nothing'],
+  ]) {
+    const response = await rate(body);
+    assert.equal(response.status, 400, `${why}: ${JSON.stringify(response.body)}`);
+  }
+
+  assert.equal((await store.kits.findById(kitId)).practice.length, 0, 'nothing was written');
+
+  // The question scale is untouched: 5 is still a valid question rating.
+  assert.equal((await rate({ questionId: 'q1', confidence: 5 })).status, 201);
+});
+
 test('rate limiting refuses with a retry hint rather than failing opaquely', async () => {
   const limited = createRateLimit({ limit: 1, windowMs: 60_000, keyBy: () => 'fixed' });
   const calls = [];
