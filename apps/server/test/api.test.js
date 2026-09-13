@@ -1243,6 +1243,36 @@ test('a card rating outside again..easy, for a missing card, or about two things
   assert.equal((await rate({ questionId: 'q1', confidence: 5 })).status, 201);
 });
 
+test('the practice read serves the deck least confident first, unseen cards in the middle', async () => {
+  const alice = client();
+  await alice.signUp('practice-deck@example.com');
+  const kitId = await giveKitTo('practice-deck@example.com');
+  await store.kits.write({
+    kitId,
+    set: { 'kit.flashcards': [generatedCard('f1', 'r1'), generatedCard('f2', 'r2'), generatedCard('f3', 'r1')] },
+  });
+  const rate = (body) => alice.call(`/api/kits/${kitId}/practice`, { method: 'POST', body: JSON.stringify(body) });
+
+  // Before any rating the deck is simply the kit's order.
+  const fresh = await alice.call(`/api/kits/${kitId}/practice`);
+  assert.deepEqual(fresh.body.deck.map((card) => card.id), ['f1', 'f2', 'f3']);
+  assert.ok(fresh.body.deck.every((card) => card.seen === false));
+
+  await rate({ cardId: 'f1', confidence: 4 }); // easy
+  await rate({ cardId: 'f2', confidence: 1 }); // again
+
+  const next = await alice.call(`/api/kits/${kitId}/practice`);
+  assert.deepEqual(
+    next.body.deck.map((card) => [card.id, card.seen, card.latest]),
+    [
+      ['f2', true, 1],
+      ['f3', false, null],
+      ['f1', true, 4],
+    ],
+    'again first, the unseen card next, easy last'
+  );
+});
+
 test('rate limiting refuses with a retry hint rather than failing opaquely', async () => {
   const limited = createRateLimit({ limit: 1, windowMs: 60_000, keyBy: () => 'fixed' });
   const calls = [];

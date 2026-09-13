@@ -1,12 +1,18 @@
 /**
  * practiceRoutes.js — record how confident someone felt, card by card or question by question.
  *
- * Decides: what a practice rating is, where it lives, and how the log is summarised per
- * item.
+ * Decides: what a practice rating is, where it lives, how the log is summarised per
+ * item, and that the practice read carries the deck in practice order.
  *
- * Does NOT decide: what to do with the ratings. The order in which flashcards are
- * practised is decided from them elsewhere; reordering a study SCHEDULE around weak
- * answers is still out of scope.
+ * Does NOT decide: what that order is. `orderCards` in core decides it from the ratings;
+ * this route only serves the answer. Reordering a study SCHEDULE around weak answers is
+ * still out of scope.
+ *
+ * THE ORDER IS SERVED, NOT COMPUTED IN THE BROWSER. The web client imports nothing from
+ * core, so a client that ordered cards itself would be carrying a second copy of the
+ * algorithm — one that could drift from the one the tests defend. The order is computed
+ * on every read, at the moment of the read, because its recency push depends on the
+ * clock.
  *
  * RATINGS ARE NOT PART OF THE KIT. They live in their own array on the kit DOCUMENT,
  * beside `kit`, never inside it. Three reasons:
@@ -27,6 +33,8 @@
  * because a regeneration finished in another — for a write that cannot conflict with
  * anything.
  */
+
+import { orderCards } from '@aipk/core/practice/orderCards.js';
 
 import { route, ApiError } from './errors.js';
 import { validatePractice } from './validate.js';
@@ -110,7 +118,8 @@ export function mountPracticeRoutes(app) {
   );
 
   /**
-   * GET /api/kits/:id/practice — the log, and a summary per card and per question.
+   * GET /api/kits/:id/practice — the log, a summary per card and per question, and the
+   * deck: the kit's flashcards in the order to practise them next.
    */
   app.get(
     '/api/kits/:id/practice',
@@ -122,6 +131,9 @@ export function mountPracticeRoutes(app) {
       response.json({
         total: entries.length,
         entries,
+        // Least confident first (`orderCards`). Empty for a kit that has not finished
+        // building, which has no flashcards to order.
+        deck: orderCards({ cards: request.kit.kit?.flashcards ?? [], ratings: entries, now: Date.now() }),
         cards: summariseBy(entries, 'cardId'),
         // Weakest first: the point of recording confidence is to find what to revise,
         // and a list sorted by question id makes that the reader's job.
