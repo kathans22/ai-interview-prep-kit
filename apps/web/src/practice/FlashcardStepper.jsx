@@ -26,6 +26,12 @@
  * A RATING NEVER WAITS FOR THE NETWORK, AND NEVER FAILS QUIETLY. It is drawn and the
  * session moves on at once; the card then says whether it was saved, and a failed one says
  * so on the card as well as in the page's toast, and can simply be chosen again.
+ *
+ * KEYBOARD FIRST. Space reveals, 1–4 rate, the arrows move — each doing exactly what its
+ * button does, through the same functions, so a key press and a click can never disagree.
+ * What each key must NOT do is `shortcuts.js`. The shortcuts are listed on screen, not
+ * left to be discovered, and each control carries `aria-keyshortcuts` so assistive
+ * technology can announce them too.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -33,6 +39,7 @@ import { useEffect, useRef, useState } from 'react';
 import { buttonClasses } from '../ui/Button.jsx';
 import { indexRequirements } from '../kits/kitView.js';
 import { RATINGS, ratingFor } from './ratings.js';
+import { SHORTCUTS, shortcutFor } from './shortcuts.js';
 import {
   createSession,
   currentCardId,
@@ -92,6 +99,31 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
     revealRef.current?.focus();
   }, [session.index, session.revealed]);
 
+  // One listener for the life of the stepper, reading the latest session and handlers
+  // through a ref — re-binding on every render would briefly drop key presses.
+  const keyboard = useRef(null);
+  keyboard.current = {
+    revealed: session.revealed,
+    reveal: () => setSession(reveal),
+    previous: () => setSession(previous),
+    next: () => setSession(next),
+    rate: (value) => handleRate(value),
+  };
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const actions = keyboard.current;
+      const action = shortcutFor(event, { revealed: actions.revealed });
+      if (!action) return;
+      // Only a key this screen acts on is claimed; Space would otherwise scroll the page.
+      event.preventDefault();
+      if (action.type === 'rate') actions.rate(action.value);
+      else actions[action.type]();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   if (!card) return null;
 
   async function handleRate(value) {
@@ -109,9 +141,10 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
   }
 
   const helpsWith = (card.requirement_ids ?? []).map((id) => byRequirement.get(id)?.text ?? id);
-  const control = (label, blocked, onPress) => (
+  const control = (label, blocked, onPress, keys) => (
     <button
       type="button"
+      aria-keyshortcuts={keys}
       aria-disabled={blocked || undefined}
       onClick={() => {
         if (!blocked) onPress();
@@ -123,6 +156,7 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
   );
 
   return (
+    <>
     <article aria-labelledby="practice-card-position" className="rounded-lg border border-slate-200 bg-white">
       <header className="flex flex-wrap items-baseline justify-between gap-2 border-b border-slate-200 px-4 py-3">
         <h2 id="practice-card-position" className="text-sm font-semibold text-slate-900">
@@ -165,6 +199,7 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
                     <button
                       key={rating.key}
                       type="button"
+                      aria-keyshortcuts={String(rating.value)}
                       aria-pressed={sessionRating?.value === rating.value}
                       onClick={() => handleRate(rating.value)}
                       className={buttonClasses({
@@ -182,6 +217,7 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
             <button
               ref={revealRef}
               type="button"
+              aria-keyshortcuts="Space"
               onClick={() => setSession(reveal)}
               className={buttonClasses({ className: 'w-full sm:w-auto' })}
             >
@@ -201,13 +237,13 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
       </div>
 
       <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-4 py-3">
-        {control('Previous', isFirst(session), () => setSession(previous))}
+        {control('Previous', isFirst(session), () => setSession(previous), 'ArrowLeft')}
         {/* Finishing is always available: a session is as long as the person has time
             for, and the summary is where the untouched requirements are named. */}
         <button type="button" onClick={() => onFinish?.(session)} className={buttonClasses({ variant: 'ghost' })}>
           Finish session
         </button>
-        {control('Next', isLast(session), () => setSession(next))}
+        {control('Next', isLast(session), () => setSession(next), 'ArrowRight')}
       </footer>
 
       {/* Where the session is, for anyone who cannot see the heading change. */}
@@ -215,5 +251,34 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
         {position}
       </p>
     </article>
+
+    {/* Shown, not hidden behind a "?" — a shortcut nobody knows about is not keyboard-first. */}
+    <section
+      aria-labelledby="practice-shortcuts-heading"
+      data-practice-shortcuts=""
+      className="mt-3 rounded-md border border-slate-200 bg-white px-4 py-3"
+    >
+      <h2 id="practice-shortcuts-heading" className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+        Keyboard shortcuts
+      </h2>
+      <dl className="mt-2 space-y-1.5 text-sm text-slate-700">
+        {SHORTCUTS.map((shortcut) => (
+          <div key={shortcut.action} className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <dt className="flex flex-wrap gap-1">
+              {shortcut.keys.map((key) => (
+                <kbd
+                  key={key}
+                  className="rounded border border-slate-300 bg-slate-50 px-1.5 py-0.5 font-mono text-xs text-slate-800"
+                >
+                  {key}
+                </kbd>
+              ))}
+            </dt>
+            <dd className="min-w-0">{shortcut.action}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+    </>
   );
 }
