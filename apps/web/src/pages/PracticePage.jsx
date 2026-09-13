@@ -42,6 +42,7 @@ import { ASYNC_STATES } from '../hooks/useAsync.js';
 import { useKit, usePracticeHistory, useRecordPractice } from '../hooks/useKits.js';
 import FlashcardStepper from '../practice/FlashcardStepper.jsx';
 import SessionSummary from '../practice/SessionSummary.jsx';
+import { describeWeakSpots } from '../practice/weakSpots.js';
 import { summariseSession } from '../practice/summary.js';
 
 /** The cards in `order` first, then any the order did not mention, in the kit's order. */
@@ -63,6 +64,7 @@ export default function PracticePage() {
   const ready = status === 'ready' && Boolean(kit);
   const cards = ready && Array.isArray(kit.flashcards) ? kit.flashcards : [];
   const history = new Map(practiceHistory.cards.map((summary) => [summary.id, summary]));
+  const weakSpots = describeWeakSpots(practiceHistory.weakRequirements, kit?.role?.requirements ?? [], cards);
 
   // One session at a time: its round (which remounts the stepper), its order, and — once
   // finished — its summary.
@@ -116,6 +118,19 @@ export default function PracticePage() {
         </Link>
       </div>
       {ready && kit.role?.title ? <p className="mt-1 text-sm text-slate-600">{kit.role.title}</p> : null}
+
+      {ready && weakSpots.length > 0 ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900" data-weak-spots="">
+          <p className="font-medium">Weak spots from your scored answers</p>
+          <p className="mt-0.5">
+            Cards covering {weakSpots.map((spot) => spot.text).join(' · ')} are pulled forward in this deck,
+            because a scored answer missed them.
+            {weakSpots.some((spot) => !spot.hasCard)
+              ? ' A weak spot with no card cannot be practised — add one on the kit page.'
+              : ''}
+          </p>
+        </div>
+      ) : null}
 
       <div className="mt-6">
         <SectionState

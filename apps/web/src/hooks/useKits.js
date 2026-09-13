@@ -123,6 +123,8 @@ export function usePracticeHistory(id) {
     deck: data?.deck ?? [],
     cards: data?.cards ?? [],
     questions: data?.questions ?? [],
+    /** Requirement ids a scored answer missed — what the server pulled forward in the deck. */
+    weakRequirements: data?.weakRequirements ?? [],
   };
 }
 
