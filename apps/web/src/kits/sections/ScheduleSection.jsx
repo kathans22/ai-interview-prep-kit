@@ -6,21 +6,38 @@
  * Does NOT decide: which question goes on which day, or how long a day is. The allocator
  * decides both on the server and recomputes them whenever the question set changes, so
  * this section only ever shows the server's answer.
+ *
+ * REBUILDING IS A REQUEST TO THE SERVER, NOT A LOCAL SHUFFLE, for the same reason: the
+ * allocation is the server's. Days a person arranged are kept; a day the rebuild changed
+ * is outlined afterwards.
  */
 
 import Card from '../../ui/Card.jsx';
 import EmptyState from '../../ui/EmptyState.jsx';
 import SectionState from '../../ui/SectionState.jsx';
+import RegenerateButton from '../RegenerateButton.jsx';
+import RegenerationSummary from '../RegenerationSummary.jsx';
 import { deriveSectionState, describeSchedule, formatMinutes } from '../kitView.js';
 
-export default function ScheduleSection({ kit }) {
+const TARGET = Object.freeze({ section: 'schedule' });
+
+export default function ScheduleSection({ kit, regeneration, onRegenerate }) {
   const schedule = kit?.schedule;
   const present = Boolean(schedule) && Array.isArray(schedule.days);
   const view = describeSchedule(schedule, kit?.questions);
-  const state = deriveSectionState({ present, isEmpty: present && schedule.days.length === 0 });
+  const busy = regeneration?.isRunning(TARGET) ?? false;
+  const result = regeneration?.resultFor(TARGET) ?? null;
+  const state = deriveSectionState({ present, isEmpty: present && schedule.days.length === 0, busy });
 
   return (
-    <Card title="Schedule" titleAs="h2">
+    <Card
+      title="Schedule"
+      titleAs="h2"
+      actions={
+        present ? <RegenerateButton target={TARGET} regeneration={regeneration} onRegenerate={onRegenerate} /> : null
+      }
+    >
+      <RegenerationSummary className="mb-4" result={busy ? null : result} onDismiss={() => regeneration.dismiss(TARGET)} />
       <SectionState
         status={state.status}
         error={state.error}
@@ -35,7 +52,13 @@ export default function ScheduleSection({ kit }) {
 
         <ol className="mt-3 space-y-3">
           {view.days.map((day) => (
-            <li key={day.day} className="rounded-md border border-slate-200 p-3">
+            <li
+              key={day.day}
+              data-regenerated={result?.changed.has(String(day.day)) ? '' : undefined}
+              className={`rounded-md border p-3 ${
+                result?.changed.has(String(day.day)) ? 'border-emerald-400 ring-1 ring-emerald-400' : 'border-slate-200'
+              }`}
+            >
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <h3 className="text-sm font-semibold text-slate-900">Day {day.day}</h3>
                 <span className="text-sm text-slate-600">{formatMinutes(day.minutes)}</span>

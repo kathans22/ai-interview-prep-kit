@@ -11,11 +11,17 @@
  * AN EMPTY BRIEF STAYS EDITABLE. When nothing could be read, the fields are still shown,
  * with a note saying why they are empty. A person who knows the company can write the
  * brief themselves, and an empty state with no way forward would stop them.
+ *
+ * WHILE THE BRIEF REGENERATES, ONLY THE BRIEF WAITS. Its own `SectionState` shows the
+ * progress; every other section stays usable. Afterwards, a rewritten field is outlined
+ * and a summary says which were rewritten and which were kept.
  */
 
 import Card from '../../ui/Card.jsx';
 import SectionState from '../../ui/SectionState.jsx';
 import EditableText from '../EditableText.jsx';
+import RegenerateButton from '../RegenerateButton.jsx';
+import RegenerationSummary from '../RegenerationSummary.jsx';
 import { deriveSectionState } from '../kitView.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
 
@@ -34,15 +40,27 @@ function sourceLabel(url) {
   }
 }
 
-export default function BriefSection({ kit, editor }) {
+const TARGET = Object.freeze({ section: 'company_brief' });
+
+export default function BriefSection({ kit, editor, regeneration, onRegenerate }) {
   const brief = kit?.company_brief;
   const present = Boolean(brief) && typeof brief === 'object';
   const sources = Array.isArray(brief?.sources) ? brief.sources : [];
   const blank = present && !brief.summary && !brief.what_they_do;
-  const state = deriveSectionState({ present });
+  const busy = regeneration?.isRunning(TARGET) ?? false;
+  const result = regeneration?.resultFor(TARGET) ?? null;
+  const state = deriveSectionState({ present, busy });
 
   return (
-    <Card title="Company brief" titleAs="h2">
+    <Card
+      title="Company brief"
+      titleAs="h2"
+      actions={
+        present ? <RegenerateButton target={TARGET} regeneration={regeneration} onRegenerate={onRegenerate} /> : null
+      }
+    >
+      <RegenerationSummary className="mb-4" result={busy ? null : result} onDismiss={() => regeneration.dismiss(TARGET)} />
+
       <SectionState status={state.status} error={state.error} loadingLabel="Regenerating the company brief…">
         {blank ? (
           <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -60,7 +78,10 @@ export default function BriefSection({ kit, editor }) {
                   {field.label}
                   <ProvenanceBadges item={brief?.provenance?.[field.key]} />
                 </dt>
-                <dd className="mt-1">
+                <dd
+                  className={`mt-1 ${result?.changed.has(field.key) ? 'rounded-md p-2 ring-2 ring-emerald-400' : ''}`}
+                  data-regenerated={result?.changed.has(field.key) ? '' : undefined}
+                >
                   <EditableText
                     rows={4}
                     value={brief?.[field.key] ?? ''}

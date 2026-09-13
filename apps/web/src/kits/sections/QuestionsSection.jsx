@@ -38,6 +38,11 @@
  * focus, so pressing Move up until the question reaches the top would throw focus to the
  * page body on the last press.
  *
+ * EACH CATEGORY REGENERATES ON ITS OWN, and while it does only that category waits: its
+ * list is replaced by progress and stops being a drop target, and every other category
+ * stays editable. Afterwards the replaced and new questions are outlined, and a summary
+ * under the heading says what was replaced, kept, added and removed.
+ *
  * FOCUS NEVER DROPS TO THE TOP OF THE PAGE. It returns to the Add button when the form
  * closes, to the Delete button after an undo, and — when the undo window closes under a
  * focused Undo button — to the category's Add button, which is always there.
@@ -54,11 +59,15 @@ import { buttonClasses } from '../../ui/Button.jsx';
 import Card from '../../ui/Card.jsx';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import SectionState from '../../ui/SectionState.jsx';
+import Spinner from '../../ui/Spinner.jsx';
 import AddQuestionForm from '../AddQuestionForm.jsx';
 import CategoryMenu from '../CategoryMenu.jsx';
 import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
 import EditableText from '../EditableText.jsx';
 import PinToggle from '../PinToggle.jsx';
+import RegenerateButton from '../RegenerateButton.jsx';
+import RegenerationSummary from '../RegenerationSummary.jsx';
+import { describeTarget } from '../regeneration.js';
 import {
   CATEGORY_LABELS,
   DIFFICULTY_LABELS,
@@ -91,7 +100,7 @@ function GripIcon() {
   );
 }
 
-export default function QuestionsSection({ kit, editor }) {
+export default function QuestionsSection({ kit, editor, regeneration, onRegenerate }) {
   const questions = kit?.questions;
   const present = Array.isArray(questions);
   const groups = groupQuestions(questions);
@@ -191,17 +200,40 @@ export default function QuestionsSection({ kit, editor }) {
         {/* Sections are padded rather than spaced, so the categories touch and a drag
             passing from one to the next never crosses a gap that is no target at all. */}
         <div className="-my-3">
-          {groups.map((group) => (
+          {groups.map((group) => {
+            const target = { section: 'questions', category: group.category };
+            const busy = regeneration?.isRunning(target) ?? false;
+            const result = busy ? null : regeneration?.resultFor(target) ?? null;
+            const regenerable =
+              QUESTION_CATEGORY_ORDER.includes(group.category) &&
+              group.questions.some((question) => !question.pendingAdd && !question.pendingDelete);
+
+            return (
             <section
               key={group.category}
               aria-labelledby={`questions-${group.category}`}
-              data-drop-category={group.category}
+              aria-busy={busy || undefined}
+              // A category that is regenerating is not a place to drop a question.
+              data-drop-category={busy ? undefined : group.category}
               className="py-3"
             >
-              <h3 id={`questions-${group.category}`} className="text-sm font-semibold text-slate-900">
-                {group.label} <span className="font-normal text-slate-500">({countVisible(group.questions)})</span>
-              </h3>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 id={`questions-${group.category}`} className="text-sm font-semibold text-slate-900">
+                  {group.label} <span className="font-normal text-slate-500">({countVisible(group.questions)})</span>
+                </h3>
+                {regenerable || busy ? (
+                  <RegenerateButton target={target} regeneration={regeneration} onRegenerate={onRegenerate} />
+                ) : null}
+              </div>
 
+              <RegenerationSummary className="mt-2" result={result} onDismiss={() => regeneration.dismiss(target)} />
+
+              {busy ? (
+                <div className="py-6">
+                  <Spinner label={describeTarget(target).running} />
+                </div>
+              ) : (
+              <>
               {group.questions.length === 0 ? (
                 <p className="mt-2 text-sm text-slate-500">No {group.label.toLowerCase()} questions yet.</p>
               ) : (
@@ -242,13 +274,19 @@ export default function QuestionsSection({ kit, editor }) {
                     }
 
                     const isDragging = drag.draggingId === question.id;
+                    const regenerated = result?.changed.has(question.id) ?? false;
 
                     return (
                       <li
                         key={question.id}
                         data-question-id={question.id}
+                        data-regenerated={regenerated ? '' : undefined}
                         className={`relative rounded-md border p-3 ${
-                          isDragging ? 'border-sky-600 bg-sky-50 opacity-60' : 'border-slate-200'
+                          isDragging
+                            ? 'border-sky-600 bg-sky-50 opacity-60'
+                            : regenerated
+                              ? 'border-emerald-400 ring-1 ring-emerald-400'
+                              : 'border-slate-200'
                         }`}
                       >
                         {lineBefore(group.category, question.id)}
@@ -265,6 +303,11 @@ export default function QuestionsSection({ kit, editor }) {
                           <span className="font-mono">{question.id}</span>
                           <span>{DIFFICULTY_LABELS[question.difficulty] ?? `Difficulty ${question.difficulty}`}</span>
                           <ProvenanceBadges item={question} />
+                          {regenerated ? (
+                            <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-xs font-medium text-emerald-900">
+                              {result.added.has(question.id) ? 'New' : 'Regenerated'}
+                            </span>
+                          ) : null}
                           <span className="ml-auto inline-flex items-center gap-1">
                             <PinToggle
                               item={question}
@@ -375,8 +418,11 @@ export default function QuestionsSection({ kit, editor }) {
                   Add a {group.label.toLowerCase()} question
                 </button>
               )}
+              </>
+              )}
             </section>
-          ))}
+            );
+          })}
         </div>
       </SectionState>
 

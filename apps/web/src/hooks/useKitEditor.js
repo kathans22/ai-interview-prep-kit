@@ -20,6 +20,13 @@
  * FAILURES ARE REPORTED, NOT SWALLOWED. `onError` receives the error and the operations
  * that were rolled back, and the builder shows it. A cancelled request is the one
  * exception, because that is a request this app chose to abandon.
+ *
+ * SOME WRITES MUST NOT SHARE THE WIRE WITH EDITS. A regeneration moves the same revision
+ * an edit does, so `exclusive` saves everything pending, stops sending while its task
+ * runs — edits keep drawing on screen and wait — adopts the kit the task returns as the
+ * new base, and then sends what waited. The one gap: an edit made during that task is
+ * not sent if the page is closed before the task returns, because sending it then would
+ * only earn a 409.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -57,6 +64,13 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
 
   const timer = useRef(null);
   const sending = useRef(false);
+  // Resolves when the request currently on the wire lands, so `settle` can wait for it.
+  const landed = useRef(Promise.resolve());
+  // How many saves have failed, so `settle` can tell whether the ones it waited for did.
+  const failures = useRef(0);
+  // Set while an exclusive task runs: nothing is sent.
+  const exclusiveRef = useRef(false);
+  const claimed = useRef(false);
   const onErrorRef = useRef(onError);
   onErrorRef.current = onError;
 
@@ -113,6 +127,7 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     clearTimeout(timer.current);
     timer.current = null;
     if (sending.current) return; // the in-flight request reschedules on landing
+    if (exclusiveRef.current) return; // the exclusive task sends what waited when it ends
 
     const { state: next, batch } = takeBatch(stateRef.current, Date.now());
     if (batch.length === 0) {
@@ -123,17 +138,23 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
 
     set(next);
     sending.current = true;
+    let markLanded;
+    landed.current = new Promise((resolve) => {
+      markLanded = resolve;
+    });
 
     try {
       const response = await kits.edit(kitId, batch.map(toServerOp));
       set(confirm(stateRef.current, response.kit));
       settleWaiters(batch, 'resolve', response.kit);
     } catch (error) {
+      failures.current += 1;
       set(fail(stateRef.current));
       settleWaiters(batch, 'reject', error);
       if (!isCancelled(error)) onErrorRef.current?.(error, batch);
     } finally {
       sending.current = false;
+      markLanded();
       // Anything typed, or held, while that request was out goes next.
       if (stateRef.current.queued.length > 0) schedule();
     }
@@ -239,6 +260,61 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     [set, edit]
   );
 
+  /**
+   * Save everything pending — ending every undo window, since what follows needs a kit
+   * that has stopped moving — and resolve once nothing is waiting or on the wire.
+   * Rejects if any of it failed; the editor has already reported the failure itself.
+   */
+  const settle = useCallback(async () => {
+    const failuresBefore = failures.current;
+    set(releaseAll(stateRef.current));
+
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (sending.current) {
+        await landed.current;
+        continue;
+      }
+      const { inflight, queued } = stateRef.current;
+      if (inflight.length === 0 && queued.length === 0) break;
+      await flushRef.current();
+    }
+
+    if (failures.current !== failuresBefore) {
+      throw new Error('A change you made could not be saved, so nothing else was started. Try again once it is saved.');
+    }
+    if (sending.current || stateRef.current.queued.length > 0) {
+      throw new Error('Your changes are still being saved. Try again in a moment.');
+    }
+  }, [set]);
+
+  /**
+   * Run a write that must not interleave with edits. `task` receives the confirmed kit
+   * and returns a response carrying the server's new kit, which becomes the base.
+   */
+  const exclusive = useCallback(
+    async (task) => {
+      if (claimed.current) throw new Error('Something else is already being regenerated. Wait for it to finish.');
+      claimed.current = true;
+
+      try {
+        await settle();
+        exclusiveRef.current = true;
+        clearTimeout(timer.current);
+        timer.current = null;
+
+        const response = await task(stateRef.current.base);
+        if (response?.kit) set({ ...stateRef.current, base: response.kit });
+        return response;
+      } finally {
+        exclusiveRef.current = false;
+        claimed.current = false;
+        // What was typed while the task ran goes now, onto the kit it returned.
+        if (stateRef.current.queued.length > 0) flushRef.current();
+      }
+    },
+    [set, settle]
+  );
+
   // Never lose a waiting edit or a confirmed delete: when the page is hidden, or the
   // builder goes, every hold ends and everything waiting is sent.
   useEffect(() => {
@@ -266,5 +342,17 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     [keys]
   );
 
-  return { kit, edit, add, arrange, remove, undoRemove, revert, statusOf, flush: () => flushRef.current() };
+  return {
+    kit,
+    edit,
+    add,
+    arrange,
+    remove,
+    undoRemove,
+    revert,
+    statusOf,
+    settle,
+    exclusive,
+    flush: () => flushRef.current(),
+  };
 }
