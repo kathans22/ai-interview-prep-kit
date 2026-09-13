@@ -106,6 +106,11 @@ export default function KitPage() {
       ) : (
         <p className="mt-1 text-sm text-slate-600">Built from the posting alone — no company site was given.</p>
       )}
+      {ready && (kit.flashcards?.length ?? 0) > 0 ? (
+        <Link to={`/kits/${encodeURIComponent(id)}/practice`} className={buttonClasses({ size: 'sm', className: 'mt-3' })}>
+          Practise the flashcards
+        </Link>
+      ) : null}
 
       <SectionState
         status={requestStatus}
