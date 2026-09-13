@@ -49,6 +49,7 @@ export const EDIT_OPS = Object.freeze([
   'delete-question',
   'add-question',
   'move-category',
+  'reorder-questions',
   'reorder-day',
   'pin',
   'edit-brief',
@@ -127,6 +128,42 @@ function applyOp(draft, op, stamp) {
       question.category = op.category;
       Object.assign(question, markEdited(question, { updatedAt: stamp }));
       return `moved ${op.id} to ${op.category}`;
+    }
+
+    case 'reorder-questions': {
+      // The builder shows questions grouped by category, in array order. Reordering a
+      // category is therefore a statement about that category alone: the op carries the
+      // category's COMPLETE id list in its new order, and the category's questions are
+      // written back into the slots they already occupy, so no other category moves.
+      //
+      // The whole list rather than "move X before Y", because a list can be checked
+      // exactly — a missing, extra or repeated id is a client that has lost track of the
+      // kit, and applying its guess would silently drop or duplicate a question.
+      if (!QUESTION_CATEGORIES.includes(op.category)) {
+        throw new ApiError('VALIDATION_FAILED', `category must be one of ${QUESTION_CATEGORIES.join(', ')}.`);
+      }
+      const ids = Array.isArray(op.question_ids) ? op.question_ids : [];
+      const inCategory = draft.questions.filter((entry) => entry.category === op.category);
+      const byId = new Map(inCategory.map((entry) => [entry.id, entry]));
+
+      const complete =
+        ids.length === inCategory.length && new Set(ids).size === ids.length && ids.every((id) => byId.has(id));
+      if (!complete) {
+        throw new ApiError(
+          'VALIDATION_FAILED',
+          `question_ids must list every ${op.category} question exactly once (${inCategory.length} expected).`
+        );
+      }
+
+      // Order is arrangement, not content, so provenance is NOT marked: reordering a
+      // generated question does not make it the person's work, and must not protect it
+      // from a regeneration they may want. Unpinned schedule days are re-derived from the
+      // new order by `recomputeDerived`, like after any other change to the question set.
+      let next = 0;
+      draft.questions = draft.questions.map((entry) =>
+        entry.category === op.category ? byId.get(ids[next++]) : entry
+      );
+      return `reordered ${op.category}`;
     }
 
     case 'reorder-day': {

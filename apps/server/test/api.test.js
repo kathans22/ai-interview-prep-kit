@@ -529,6 +529,101 @@ test('pin works on a flashcard as well as a question, resolved by the id prefix'
   assert.equal(missing.status, 400);
 });
 
+/** A generated question, as `stampKit` leaves one. */
+const generatedQuestion = (id, requirementId, category) => ({
+  id,
+  requirement_ids: [requirementId],
+  category,
+  prompt: `prompt of ${id}`,
+  answer_outline: 'what a strong answer contains',
+  difficulty: 2,
+  origin: 'generated',
+  pinned: false,
+  updatedAt: '2026-09-11T00:00:00.000Z',
+});
+
+test('reordering a category moves only that category, and marks nothing edited', async () => {
+  const alice = client();
+  await alice.signUp('reorder@example.com');
+  const kitId = await giveKitTo('reorder@example.com');
+  await store.kits.write({
+    kitId,
+    set: {
+      'kit.questions': [
+        generatedQuestion('q1', 'r1', 'technical'),
+        generatedQuestion('q2', 'r2', 'behavioural'),
+        generatedQuestion('q3', 'r1', 'technical'),
+        generatedQuestion('q4', 'r1', 'technical'),
+      ],
+    },
+  });
+
+  const response = await patchKit(alice, kitId, [
+    { type: 'reorder-questions', category: 'technical', question_ids: ['q4', 'q1', 'q3'] },
+  ]);
+
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(
+    response.body.kit.questions.map((entry) => entry.id),
+    ['q4', 'q2', 'q1', 'q3'],
+    'the technical slots are refilled in the new order; the behavioural question keeps its slot'
+  );
+  // Order is arrangement, not content: nothing becomes protected from regeneration.
+  assert.ok(response.body.kit.questions.every((entry) => entry.origin === 'generated'));
+});
+
+test('a reorder that does not list every question in the category exactly once is refused', async () => {
+  const alice = client();
+  await alice.signUp('reorder-bad@example.com');
+  const kitId = await giveKitTo('reorder-bad@example.com');
+  await store.kits.write({
+    kitId,
+    set: {
+      'kit.questions': [
+        generatedQuestion('q1', 'r1', 'technical'),
+        generatedQuestion('q2', 'r2', 'behavioural'),
+        generatedQuestion('q3', 'r1', 'technical'),
+      ],
+    },
+  });
+
+  for (const question_ids of [['q1'], ['q1', 'q1'], ['q1', 'q2'], ['q3', 'q1', 'q9']]) {
+    const response = await patchKit(alice, kitId, [{ type: 'reorder-questions', category: 'technical', question_ids }]);
+    assert.equal(response.status, 400, `expected a 400 for ${JSON.stringify(question_ids)}`);
+  }
+
+  const unknownCategory = await patchKit(alice, kitId, [
+    { type: 'reorder-questions', category: 'trivia', question_ids: [] },
+  ]);
+  assert.equal(unknownCategory.status, 400);
+
+  assert.deepEqual(
+    (await store.kits.findById(kitId)).kit.questions.map((entry) => entry.id),
+    ['q1', 'q2', 'q3'],
+    'nothing was written'
+  );
+});
+
+test('a drag across categories is one batch: move the question, then order its new category', async () => {
+  const alice = client();
+  await alice.signUp('reorder-move@example.com');
+  const kitId = await giveKitTo('reorder-move@example.com');
+
+  const response = await patchKit(alice, kitId, [
+    { type: 'move-category', id: 'q2', category: 'technical' },
+    { type: 'reorder-questions', category: 'technical', question_ids: ['q2', 'q1'] },
+  ]);
+
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(
+    response.body.kit.questions.map((entry) => [entry.id, entry.category]),
+    [
+      ['q2', 'technical'],
+      ['q1', 'technical'],
+    ]
+  );
+});
+
 test('undo restores the section, once', async () => {
   const alice = client();
   await alice.signUp('undo@example.com');
