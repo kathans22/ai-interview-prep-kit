@@ -100,7 +100,7 @@ function GripIcon() {
   );
 }
 
-export default function QuestionsSection({ kit, editor, regeneration, onRegenerate }) {
+export default function QuestionsSection({ kit, editor, regeneration, onRegenerate, onUndo }) {
   const questions = kit?.questions;
   const present = Array.isArray(questions);
   const groups = groupQuestions(questions);
@@ -226,11 +226,16 @@ export default function QuestionsSection({ kit, editor, regeneration, onRegenera
                 ) : null}
               </div>
 
-              <RegenerationSummary className="mt-2" result={result} onDismiss={() => regeneration.dismiss(target)} />
+              <RegenerationSummary
+                className="mt-2"
+                result={result}
+                onDismiss={() => regeneration.dismiss(target)}
+                onUndo={regeneration?.canUndo(target) ? () => onUndo(target) : null}
+              />
 
               {busy ? (
                 <div className="py-6">
-                  <Spinner label={describeTarget(target).running} />
+                  <Spinner label={regeneration?.busyLabel(target) ?? describeTarget(target).running} />
                 </div>
               ) : (
               <>

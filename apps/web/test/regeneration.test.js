@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { isReplaceable } from '@aipk/core/contracts/provenance.js';
 
 import {
+  changesSince,
   describeTarget,
   previewRegeneration,
   summariseRegeneration,
@@ -131,4 +132,38 @@ test('targets have one key each and a name that says what they regenerate', () =
   assert.equal(targetKey({ section: 'company_brief' }), 'company_brief');
   assert.equal(describeTarget({ section: 'questions', category: 'technical' }).action, 'Regenerate Technical questions');
   assert.equal(describeTarget({ section: 'schedule' }).action, 'Rebuild the schedule');
+  assert.equal(describeTarget({ section: 'questions', category: 'technical' }).undo, 'Undo regenerating the technical questions');
+});
+
+// --- what an undo would throw away ------------------------------------------
+
+test('nothing changed since the regeneration means an undo discards nothing', () => {
+  const regenerated = { questions: [q('q1', 'technical'), q('q2', 'behavioural')] };
+  assert.deepEqual(changesSince('questions', regenerated, regenerated), []);
+});
+
+test('an undo of questions would discard later changes in EVERY category, and adds and deletes too', () => {
+  const regenerated = { questions: [q('q1', 'technical'), q('q2', 'behavioural'), q('q3', 'behavioural')] };
+  const now = {
+    questions: [
+      q('q1', 'technical', { updatedAt: 'later' }), // restamped only: not a change
+      q('q2', 'behavioural', { prompt: 'edited afterwards', updatedAt: 'later' }),
+      q('pending-1', 'technical', { pendingAdd: true }),
+    ],
+  };
+  assert.deepEqual(changesSince('questions', regenerated, now), ['q2', 'a question you are adding', 'q3']);
+});
+
+test('the brief compares its fields and their provenance', () => {
+  const regenerated = { company_brief: { summary: 'a', what_they_do: 'b', provenance: { summary: { origin: 'generated' } } } };
+  const now = {
+    company_brief: { summary: 'a', what_they_do: 'b', provenance: { summary: { origin: 'generated', pinned: true } } },
+  };
+  assert.deepEqual(changesSince('company_brief', regenerated, now), ['Summary']);
+});
+
+test('the schedule ignores the restamping every save causes, and reports days that really moved', () => {
+  const regenerated = { schedule: { days: [{ day: 1, question_ids: ['q1'], updatedAt: 't1' }, { day: 2, question_ids: ['q2'] }] } };
+  const now = { schedule: { days: [{ day: 1, question_ids: ['q1'], updatedAt: 't2' }, { day: 2, question_ids: ['q2', 'q3'] }] } };
+  assert.deepEqual(changesSince('schedule', regenerated, now), ['Day 2']);
 });

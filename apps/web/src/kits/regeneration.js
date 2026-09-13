@@ -36,19 +36,33 @@ export function targetKey(target) {
 export function describeTarget(target) {
   switch (target?.section) {
     case 'company_brief':
-      return { title: 'the company brief', action: 'Regenerate the company brief', running: 'Regenerating the company brief…' };
+      return {
+        title: 'the company brief',
+        action: 'Regenerate the company brief',
+        running: 'Regenerating the company brief…',
+        undo: 'Undo regenerating the company brief',
+        undoing: 'Undoing the regeneration of the company brief…',
+      };
     case 'questions': {
       const label = CATEGORY_LABELS[target.category] ?? String(target.category);
       return {
         title: `the ${label.toLowerCase()} questions`,
         action: `Regenerate ${label} questions`,
         running: `Regenerating the ${label.toLowerCase()} questions…`,
+        undo: `Undo regenerating the ${label.toLowerCase()} questions`,
+        undoing: `Undoing the regeneration of the ${label.toLowerCase()} questions…`,
       };
     }
     case 'schedule':
-      return { title: 'the schedule', action: 'Rebuild the schedule', running: 'Rebuilding the schedule…' };
+      return {
+        title: 'the schedule',
+        action: 'Rebuild the schedule',
+        running: 'Rebuilding the schedule…',
+        undo: 'Undo rebuilding the schedule',
+        undoing: 'Undoing the rebuild of the schedule…',
+      };
     default:
-      return { title: 'this section', action: 'Regenerate', running: 'Regenerating…' };
+      return { title: 'this section', action: 'Regenerate', running: 'Regenerating…', undo: 'Undo', undoing: 'Undoing…' };
   }
 }
 
@@ -178,4 +192,62 @@ export function summariseRegeneration({ target, report, before, after }) {
   }
   const highlighted = replaced.length + added.length > 0 ? ' The new ones are highlighted.' : '';
   return { text: `${parts.join(', ')}.${highlighted}`, changed: new Set([...replaced, ...added]), added: new Set(added) };
+}
+
+/** An item as content, without the server's write stamp — which moves on every save. */
+const content = (item) => {
+  if (!item || typeof item !== 'object') return JSON.stringify(item ?? null);
+  const { updatedAt, ...rest } = item;
+  return JSON.stringify(rest);
+};
+
+/**
+ * What has changed in a section since a regeneration returned it: the work an undo would
+ * throw away.
+ *
+ * WHY UNDO CAN THROW WORK AWAY. The server's undo restores its snapshot of the WHOLE
+ * section, taken just before the regeneration. For questions that is every category —
+ * the snapshot has to be the full list, because the schedule it restores alongside
+ * references questions in all of them. So a behavioural question edited after the
+ * technical questions were regenerated goes back too. The builder lists these changes and
+ * asks before undoing, rather than letting "Undo" silently mean more than it says.
+ *
+ * Compared as content without `updatedAt`: saving anything re-derives the schedule and
+ * restamps every day, which is not a change a person made.
+ *
+ * @returns {string[]} labels of the changed items, in the order the kit holds them
+ */
+export function changesSince(section, regeneratedKit, currentKit) {
+  if (section === 'company_brief') {
+    const was = regeneratedKit?.company_brief;
+    const now = currentKit?.company_brief;
+    return Object.entries(BRIEF_FIELD_LABELS)
+      .filter(
+        ([field]) =>
+          content(was?.[field]) !== content(now?.[field]) || content(was?.provenance?.[field]) !== content(now?.provenance?.[field])
+      )
+      .map(([, label]) => label);
+  }
+
+  const schedule = section === 'schedule';
+  const listOf = (kit) => (schedule ? kit?.schedule?.days : kit?.questions) ?? [];
+  const keyOf = (item) => (schedule ? `day-${item.day}` : item.id);
+  const labelOf = (item) => {
+    if (schedule) return `Day ${item.day}`;
+    return item.pendingAdd ? 'a question you are adding' : item.id;
+  };
+
+  const was = new Map(listOf(regeneratedKit).map((item) => [keyOf(item), item]));
+  const changed = [];
+  const seen = new Set();
+
+  for (const item of listOf(currentKit)) {
+    const key = keyOf(item);
+    seen.add(key);
+    if (!was.has(key) || content(was.get(key)) !== content(item)) changed.push(labelOf(item));
+  }
+  for (const [key, item] of was) {
+    if (!seen.has(key)) changed.push(labelOf(item));
+  }
+  return changed;
 }

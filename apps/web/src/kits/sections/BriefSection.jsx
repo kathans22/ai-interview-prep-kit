@@ -42,7 +42,7 @@ function sourceLabel(url) {
 
 const TARGET = Object.freeze({ section: 'company_brief' });
 
-export default function BriefSection({ kit, editor, regeneration, onRegenerate }) {
+export default function BriefSection({ kit, editor, regeneration, onRegenerate, onUndo }) {
   const brief = kit?.company_brief;
   const present = Boolean(brief) && typeof brief === 'object';
   const sources = Array.isArray(brief?.sources) ? brief.sources : [];
@@ -59,9 +59,18 @@ export default function BriefSection({ kit, editor, regeneration, onRegenerate }
         present ? <RegenerateButton target={TARGET} regeneration={regeneration} onRegenerate={onRegenerate} /> : null
       }
     >
-      <RegenerationSummary className="mb-4" result={busy ? null : result} onDismiss={() => regeneration.dismiss(TARGET)} />
+      <RegenerationSummary
+        className="mb-4"
+        result={busy ? null : result}
+        onDismiss={() => regeneration.dismiss(TARGET)}
+        onUndo={regeneration?.canUndo(TARGET) ? () => onUndo(TARGET) : null}
+      />
 
-      <SectionState status={state.status} error={state.error} loadingLabel="Regenerating the company brief…">
+      <SectionState
+        status={state.status}
+        error={state.error}
+        loadingLabel={regeneration?.busyLabel(TARGET) ?? 'Regenerating the company brief…'}
+      >
         {blank ? (
           <p className="mb-4 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
             No company pages could be read, so no brief was written rather than one invented from the company&apos;s

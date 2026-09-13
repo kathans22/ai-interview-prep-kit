@@ -21,7 +21,7 @@ import { deriveSectionState, describeSchedule, formatMinutes } from '../kitView.
 
 const TARGET = Object.freeze({ section: 'schedule' });
 
-export default function ScheduleSection({ kit, regeneration, onRegenerate }) {
+export default function ScheduleSection({ kit, regeneration, onRegenerate, onUndo }) {
   const schedule = kit?.schedule;
   const present = Boolean(schedule) && Array.isArray(schedule.days);
   const view = describeSchedule(schedule, kit?.questions);
@@ -37,12 +37,17 @@ export default function ScheduleSection({ kit, regeneration, onRegenerate }) {
         present ? <RegenerateButton target={TARGET} regeneration={regeneration} onRegenerate={onRegenerate} /> : null
       }
     >
-      <RegenerationSummary className="mb-4" result={busy ? null : result} onDismiss={() => regeneration.dismiss(TARGET)} />
+      <RegenerationSummary
+        className="mb-4"
+        result={busy ? null : result}
+        onDismiss={() => regeneration.dismiss(TARGET)}
+        onUndo={regeneration?.canUndo(TARGET) ? () => onUndo(TARGET) : null}
+      />
       <SectionState
         status={state.status}
         error={state.error}
         isEmpty={state.isEmpty}
-        loadingLabel="Rebuilding the schedule…"
+        loadingLabel={regeneration?.busyLabel(TARGET) ?? 'Rebuilding the schedule…'}
         empty={<EmptyState title="No schedule" description="There are no days in this kit's schedule." />}
       >
         <p className="text-sm text-slate-600">
