@@ -39,7 +39,7 @@
  * next batch goes when the current one lands.
  */
 
-import { EDIT_FIELDS, applyLocalOps, currentValue } from './localOps.js';
+import { EDIT_FIELDS, applyLocalOps, currentValue, orderCategory } from './localOps.js';
 
 /** How long typing must pause before an edit is sent. */
 export const DEBOUNCE_MS = 800;
@@ -102,14 +102,81 @@ export function isHeld(op, now) {
  * Move waiting operations onto the wire.
  *
  * Returns an empty batch while a request is in flight (see "one request at a time").
- * Held operations stay queued until their window closes; the rest go, minus any that
- * would change nothing against the confirmed kit.
+ * Held operations stay queued until their window closes; the rest go in the order they
+ * were made, minus any that would change nothing against the confirmed kit.
+ *
+ * A REORDER NEVER RIDES BEHIND AN ADD. A reorder names every question in its category,
+ * and the server refuses a list that is not exactly complete. A question being added has
+ * no real id until its request returns, so a reorder in the same request could never
+ * name it. The batch is cut before such a reorder, which goes next — against a kit that
+ * has the new question under its real id.
  */
 export function takeBatch(state, now = Date.now()) {
   if (state.inflight.length > 0) return { state, batch: [] };
-  const held = state.queued.filter((op) => isHeld(op, now));
-  const batch = state.queued.filter((op) => !isHeld(op, now) && !isNoop(op, state.base));
-  return { state: { ...state, inflight: batch, queued: held }, batch };
+
+  const ready = [];
+  const kept = [];
+  let addSeen = false;
+  let cut = false;
+
+  for (const op of state.queued) {
+    if (isHeld(op, now)) {
+      kept.push(op);
+      continue;
+    }
+    if (op.type === 'reorder-questions' && addSeen) cut = true;
+    if (cut) {
+      kept.push(op);
+      continue;
+    }
+    if (op.type === 'add-question') addSeen = true;
+    ready.push(op);
+  }
+
+  const batch = resolveOrder(
+    state.base,
+    ready.filter((op) => !isNoop(op, state.base))
+  );
+  return { state: { ...state, inflight: batch, queued: kept }, batch };
+}
+
+/**
+ * Rebuild each reorder's id list against the kit as it will stand when the server reaches
+ * that operation.
+ *
+ * A reorder is computed from what the screen showed at the moment of the drop. By the
+ * time it is sent, the confirmed kit may have moved on — an add has landed with a real
+ * id — and an earlier operation in the same request may delete a question, move one out
+ * of the category or move one in. The server would refuse the stale list. Walking the
+ * batch over a copy of the confirmed questions gives every reorder its category exactly
+ * as it will be, keeping the person's order for each question they arranged and the
+ * existing order for the rest.
+ */
+export function resolveOrder(base, ops) {
+  if (!ops.some((op) => op.type === 'reorder-questions')) return ops;
+
+  let questions = (Array.isArray(base?.questions) ? base.questions : []).map((question) => ({
+    id: question.id,
+    category: question.category,
+  }));
+
+  return ops.map((op) => {
+    switch (op.type) {
+      case 'delete-question':
+        questions = questions.filter((question) => question.id !== op.id);
+        return op;
+      case 'move-category':
+        questions = questions.map((question) => (question.id === op.id ? { ...question, category: op.category } : question));
+        return op;
+      case 'reorder-questions': {
+        questions = orderCategory(questions, op.category, op.question_ids);
+        const questionIds = questions.filter((question) => question.category === op.category).map((question) => question.id);
+        return { ...op, question_ids: questionIds };
+      }
+      default:
+        return op;
+    }
+  });
 }
 
 /** The earliest moment a held operation becomes sendable, or null if none is held. */

@@ -2,25 +2,30 @@
  * QuestionsSection.jsx — the question bank, grouped by category, editable in place.
  *
  * Decides: how questions are grouped and laid out, that every category is shown —
- * including an empty one — and which parts of a question can be edited, added or deleted
- * here.
+ * including an empty one — and which parts of a question can be edited, added, deleted
+ * or rearranged here.
  *
  * Does NOT decide: which category a question belongs in, how hard it is, or how an edit
- * is saved. Grouping is `groupQuestions`; saving is the editor passed in.
+ * is saved. Grouping is `groupQuestions`; what a drop means is `planMove`; saving is the
+ * editor passed in.
  *
  * EVERY CATEGORY IS ALWAYS RENDERED, WITH ITS OWN ADD BUTTON. A section-wide empty state
  * would replace the groups — and with them the only way to add a question to an empty
- * kit. So there is no section-level empty state here; each empty group says so and
- * offers to add.
+ * kit, and the only place to drop one. So there is no section-level empty state here;
+ * each empty group says so, offers to add, and accepts a dragged question.
  *
  * A QUESTION BEING ADDED IS READ-ONLY UNTIL IT IS SAVED. Until the server confirms it,
  * it has only a temporary id, and an edit aimed at that id would reach the server as an
  * id it has never heard of. The row says "Adding…" rather than offering controls that
- * would fail.
+ * would fail, and it has no drag handle.
  *
  * DELETING ASKS FIRST, THEN CAN STILL BE TAKEN BACK. The dialog catches the slip of a
  * finger; the undo window catches the second thought. A deleted question leaves a
  * placeholder in its place for the window, and focus moves onto its Undo button.
+ *
+ * DRAGGING SHOWS WHERE IT WILL LAND BEFORE IT LANDS. A line is drawn at the drop point,
+ * and only where the drop would change something — a line under the question's own
+ * position would promise a move that does nothing.
  *
  * FOCUS NEVER DROPS TO THE TOP OF THE PAGE. It returns to the Add button when the form
  * closes, to the Delete button after an undo, and — when the undo window closes under a
@@ -42,6 +47,8 @@ import AddQuestionForm from '../AddQuestionForm.jsx';
 import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
 import EditableText from '../EditableText.jsx';
 import { DIFFICULTY_LABELS, deriveSectionState, groupQuestions, indexRequirements } from '../kitView.js';
+import { planMove } from '../reorder.js';
+import { useQuestionDrag } from '../useQuestionDrag.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
 
 /** The field operation for one question field, without its value. */
@@ -49,6 +56,20 @@ const fieldOp = (id, field) => ({ type: 'edit-question', id, field });
 const deleteOp = (id) => ({ type: 'delete-question', id });
 
 const countVisible = (list) => list.filter((question) => !question.pendingDelete).length;
+
+/** The line drawn where a dragged question would land. */
+function DropLine({ className = '' }) {
+  return <div data-drop-indicator="" aria-hidden="true" className={`h-0.5 rounded bg-sky-600 ${className}`} />;
+}
+
+/** Six dots: the conventional "this can be dragged" mark. */
+function GripIcon() {
+  return (
+    <svg viewBox="0 0 12 16" width="12" height="16" fill="currentColor" aria-hidden="true">
+      {[3, 8, 13].flatMap((cy) => [3, 9].map((cx) => <circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="1.5" />))}
+    </svg>
+  );
+}
 
 export default function QuestionsSection({ kit, editor }) {
   const questions = kit?.questions;
@@ -64,6 +85,15 @@ export default function QuestionsSection({ kit, editor }) {
   const [confirming, setConfirming] = useState(null);
   const [justDeleted, setJustDeleted] = useState(null);
   const deleteButtons = useRef({});
+
+  const drag = useQuestionDrag({
+    onDrop: (drop) => editor.arrange(planMove(questions, drop)),
+  });
+  // Where the line goes — and whether there is a line at all.
+  const dropTarget =
+    drag.draggingId && drag.target && planMove(questions, { id: drag.draggingId, ...drag.target }).length > 0
+      ? drag.target
+      : null;
 
   // When the undo window closes, the Undo button goes. If it had focus, the browser drops
   // focus to the page body; put it somewhere stable instead. Once the question is really
@@ -109,12 +139,24 @@ export default function QuestionsSection({ kit, editor }) {
     };
   };
 
+  const lineBefore = (category, id) =>
+    dropTarget?.category === category && dropTarget.beforeId === id ? (
+      <DropLine className="absolute inset-x-0 -top-[5px]" />
+    ) : null;
+
   return (
     <Card title={`Question bank${present ? ` (${countVisible(questions)})` : ''}`} titleAs="h2">
       <SectionState status={state.status} error={state.error}>
-        <div className="space-y-6">
+        {/* Sections are padded rather than spaced, so the categories touch and a drag
+            passing from one to the next never crosses a gap that is no target at all. */}
+        <div className="-my-3">
           {groups.map((group) => (
-            <section key={group.category} aria-labelledby={`questions-${group.category}`}>
+            <section
+              key={group.category}
+              aria-labelledby={`questions-${group.category}`}
+              data-drop-category={group.category}
+              className="py-3"
+            >
               <h3 id={`questions-${group.category}`} className="text-sm font-semibold text-slate-900">
                 {group.label} <span className="font-normal text-slate-500">({countVisible(group.questions)})</span>
               </h3>
@@ -126,7 +168,8 @@ export default function QuestionsSection({ kit, editor }) {
                   {group.questions.map((question) => {
                     if (question.pendingDelete) {
                       return (
-                        <li key={question.id}>
+                        <li key={question.id} data-question-id={question.id} className="relative">
+                          {lineBefore(group.category, question.id)}
                           <DeletedPlaceholder
                             id={question.id}
                             noun="question"
@@ -140,7 +183,12 @@ export default function QuestionsSection({ kit, editor }) {
 
                     if (question.pendingAdd) {
                       return (
-                        <li key={question.id} className="rounded-md border border-dashed border-slate-300 p-3">
+                        <li
+                          key={question.id}
+                          data-question-id={question.id}
+                          className="relative rounded-md border border-dashed border-slate-300 p-3"
+                        >
+                          {lineBefore(group.category, question.id)}
                           <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                             <span>Adding…</span>
                             <ProvenanceBadges item={question} />
@@ -152,9 +200,27 @@ export default function QuestionsSection({ kit, editor }) {
                       );
                     }
 
+                    const isDragging = drag.draggingId === question.id;
+
                     return (
-                      <li key={question.id} className="rounded-md border border-slate-200 p-3">
+                      <li
+                        key={question.id}
+                        data-question-id={question.id}
+                        className={`relative rounded-md border p-3 ${
+                          isDragging ? 'border-sky-600 bg-sky-50 opacity-60' : 'border-slate-200'
+                        }`}
+                      >
+                        {lineBefore(group.category, question.id)}
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                          <span
+                            aria-hidden="true"
+                            data-drag-handle={question.id}
+                            title="Drag to move"
+                            className="-my-1 -ml-1 inline-flex h-8 w-8 cursor-grab touch-none select-none items-center justify-center rounded text-slate-400 hover:bg-slate-100 active:cursor-grabbing"
+                            {...drag.handleProps(question.id)}
+                          >
+                            <GripIcon />
+                          </span>
                           <span className="font-mono">{question.id}</span>
                           <span>{DIFFICULTY_LABELS[question.difficulty] ?? `Difficulty ${question.difficulty}`}</span>
                           <ProvenanceBadges item={question} />
@@ -199,6 +265,10 @@ export default function QuestionsSection({ kit, editor }) {
                   })}
                 </ol>
               )}
+
+              {dropTarget?.category === group.category && dropTarget.beforeId === null ? (
+                <DropLine className="mt-2" />
+              ) : null}
 
               {adding === group.category ? (
                 <AddQuestionForm

@@ -45,6 +45,37 @@ function findById(list, id) {
 }
 
 /**
+ * Put one category's questions in the given order, refilling the array slots that
+ * category already occupies so no other category moves — the same rule as the server's
+ * `reorder-questions`.
+ *
+ * TOLERANT WHERE THE SERVER IS STRICT, on purpose. The server refuses a list that is not
+ * exactly the category's questions; this is used to draw a preview and to rebuild a list
+ * just before it is sent, both against a kit that may have changed since the list was
+ * made. So ids that are no longer in the category are skipped, and questions the list
+ * does not name keep their existing relative order after the ones it does.
+ */
+export function orderCategory(questions, category, ids) {
+  const list = Array.isArray(questions) ? questions : [];
+  const inCategory = list.filter((question) => question?.category === category);
+  const byId = new Map(inCategory.map((question) => [question.id, question]));
+
+  const ordered = [];
+  const seen = new Set();
+  for (const id of Array.isArray(ids) ? ids : []) {
+    if (!byId.has(id) || seen.has(id)) continue;
+    seen.add(id);
+    ordered.push(byId.get(id));
+  }
+  for (const question of inCategory) {
+    if (!seen.has(question.id)) ordered.push(question);
+  }
+
+  let next = 0;
+  return list.map((question) => (question?.category === category ? ordered[next++] : question));
+}
+
+/**
  * Apply one operation to a draft, in place. The caller owns the draft.
  *
  * An operation whose target no longer exists does nothing here — another writer may have
@@ -107,6 +138,21 @@ export function applyLocalOp(draft, op) {
     case 'delete-question': {
       const question = findById(draft.questions, op.id);
       if (question) question.pendingDelete = true;
+      return draft;
+    }
+
+    // Changing a question's category is a judgement about its content, so — as on the
+    // server — it marks a generated question edited. Reordering is not, and marks nothing.
+    case 'move-category': {
+      const question = findById(draft.questions, op.id);
+      if (!question) return draft;
+      question.category = op.category;
+      Object.assign(question, markEditedLocally(question));
+      return draft;
+    }
+
+    case 'reorder-questions': {
+      draft.questions = orderCategory(draft.questions, op.category, op.question_ids);
       return draft;
     }
 

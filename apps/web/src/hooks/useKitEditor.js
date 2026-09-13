@@ -173,6 +173,23 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
   );
 
   /**
+   * Rearrange questions: the operations one drop produces, drawn now and sent at once.
+   *
+   * Not debounced, for the same reason as an add — there is nothing to merge — and
+   * because an arrangement left waiting is one another tab has longer to make stale.
+   */
+  const arrange = useCallback(
+    (ops) => {
+      if (!Array.isArray(ops) || ops.length === 0) return;
+      let next = stateRef.current;
+      for (const op of ops) next = enqueue(next, op);
+      set(next);
+      flushRef.current();
+    },
+    [set]
+  );
+
+  /**
    * Delete a question or a flashcard — after a delay during which it can be undone.
    * Nothing is sent until the window closes; see "a delete is held" in `editQueue.js`.
    */
@@ -249,5 +266,5 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     [keys]
   );
 
-  return { kit, edit, add, remove, undoRemove, revert, statusOf, flush: () => flushRef.current() };
+  return { kit, edit, add, arrange, remove, undoRemove, revert, statusOf, flush: () => flushRef.current() };
 }
