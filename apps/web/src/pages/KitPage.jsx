@@ -133,7 +133,7 @@ export default function KitPage() {
 
           {ready ? (
             <>
-              <KitBuilder kit={kit} />
+              <KitBuilder kitId={id} kit={kit} />
 
               {/* The build's history, kept rather than discarded: what it skipped and why
                   is still a question someone reading the finished kit will ask. */}
