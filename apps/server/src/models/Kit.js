@@ -97,6 +97,10 @@ const practiceSchema = new mongoose.Schema(
     cardId: { type: String },
     confidence: { type: Number, required: true, min: 1, max: 5 },
     note: { type: String, default: '' },
+    // Set only on a scored answer: the requirement ids behind the missed outline points.
+    // DECLARED here for the same reason `cardId` is — Mongoose is strict, and an
+    // undeclared path is dropped with no error (the BUG-022 class).
+    missedRequirements: { type: [String], default: [] },
     at: { type: Date, default: () => new Date() },
   },
   { _id: false }

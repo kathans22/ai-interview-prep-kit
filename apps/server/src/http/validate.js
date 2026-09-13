@@ -208,6 +208,23 @@ export function validatePractice(body) {
   };
 }
 
+/** The score route's body: one typed answer. Untrusted, so bounded like any other input. */
+export const ANSWER_MIN = 1;
+export const ANSWER_MAX = 20_000;
+
+export function validateScoredAnswer(body) {
+  const check = createChecker();
+  if (!isPlainObject(body)) throw new ApiError('VALIDATION_FAILED', 'Request body must be a JSON object.');
+
+  const answer = typeof body.answer === 'string' ? body.answer.trim() : null;
+
+  if (answer === null || answer.length < ANSWER_MIN) check.fail('answer', 'is required — type an answer to score.');
+  else if (answer.length > ANSWER_MAX) check.fail('answer', `must be at most ${ANSWER_MAX} characters.`);
+
+  check.done();
+  return { answer };
+}
+
 /**
  * Validate a batch of cases.
  *

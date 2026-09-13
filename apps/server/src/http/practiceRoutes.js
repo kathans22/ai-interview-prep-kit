@@ -40,8 +40,8 @@ import { route, ApiError } from './errors.js';
 import { validatePractice } from './validate.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
 
-/** Keep the log bounded; a kit is not a time-series database. */
-const MAX_RATINGS = 2000;
+/** Keep the log bounded; a kit is not a time-series database. Shared with the score route. */
+export const MAX_RATINGS = 2000;
 
 /**
  * One summary per rated item: attempts, the first rating (the honest baseline), the
