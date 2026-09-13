@@ -156,6 +156,16 @@ export function applyLocalOp(draft, op) {
       return draft;
     }
 
+    // A pin touches nothing but the flag, exactly as core's `setPinned` — so a pinned
+    // generated question still says "generated": kept, but not the person's writing. One
+    // operation for both lists, as on the server; the contract's id prefixes keep ids
+    // unique across them.
+    case 'pin': {
+      const item = findById(draft.questions, op.id) ?? findById(draft.flashcards, op.id);
+      if (item) item.pinned = op.pinned !== false;
+      return draft;
+    }
+
     case 'delete-flashcard': {
       const card = findById(draft.flashcards, op.id);
       if (card) card.pendingDelete = true;
@@ -194,6 +204,12 @@ export function applyLocalOps(kit, ops) {
   const draft = structuredClone(kit);
   for (const op of ops) applyLocalOp(draft, op);
   return draft;
+}
+
+/** Whether the kit has this question or flashcard pinned — `undefined` if it has neither. */
+export function currentPinned(kit, id) {
+  const item = findById(kit?.questions, id) ?? findById(kit?.flashcards, id);
+  return item ? item.pinned === true : undefined;
 }
 
 /**

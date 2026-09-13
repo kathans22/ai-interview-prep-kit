@@ -33,6 +33,7 @@ import SectionState from '../../ui/SectionState.jsx';
 import AddFlashcardForm from '../AddFlashcardForm.jsx';
 import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
 import EditableText from '../EditableText.jsx';
+import PinToggle from '../PinToggle.jsx';
 import { deriveSectionState } from '../kitView.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
 
@@ -165,17 +166,20 @@ export default function FlashcardsSection({ kit, editor }) {
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                   <span className="font-mono">{card.id}</span>
                   <ProvenanceBadges item={card} />
-                  <button
-                    ref={(node) => {
-                      deleteButtons.current[card.id] = node;
-                    }}
-                    type="button"
-                    onClick={() => setConfirming(card)}
-                    aria-label={`Delete ${card.id}`}
-                    className={buttonClasses({ variant: 'ghost', size: 'sm', className: 'ml-auto' })}
-                  >
-                    Delete
-                  </button>
+                  <span className="ml-auto inline-flex items-center gap-1">
+                    <PinToggle item={card} onToggle={(pinned) => editor.edit({ type: 'pin', id: card.id, pinned })} />
+                    <button
+                      ref={(node) => {
+                        deleteButtons.current[card.id] = node;
+                      }}
+                      type="button"
+                      onClick={() => setConfirming(card)}
+                      aria-label={`Delete ${card.id}`}
+                      className={buttonClasses({ variant: 'ghost', size: 'sm' })}
+                    >
+                      Delete
+                    </button>
+                  </span>
                 </div>
 
                 <EditableText className="mt-1" rows={2} {...editable(card, 'front', 'front')}>

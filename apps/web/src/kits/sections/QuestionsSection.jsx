@@ -58,6 +58,7 @@ import AddQuestionForm from '../AddQuestionForm.jsx';
 import CategoryMenu from '../CategoryMenu.jsx';
 import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
 import EditableText from '../EditableText.jsx';
+import PinToggle from '../PinToggle.jsx';
 import {
   CATEGORY_LABELS,
   DIFFICULTY_LABELS,
@@ -264,17 +265,23 @@ export default function QuestionsSection({ kit, editor }) {
                           <span className="font-mono">{question.id}</span>
                           <span>{DIFFICULTY_LABELS[question.difficulty] ?? `Difficulty ${question.difficulty}`}</span>
                           <ProvenanceBadges item={question} />
-                          <button
-                            ref={(node) => {
-                              deleteButtons.current[question.id] = node;
-                            }}
-                            type="button"
-                            onClick={() => setConfirming(question)}
-                            aria-label={`Delete ${question.id}`}
-                            className={buttonClasses({ variant: 'ghost', size: 'sm', className: 'ml-auto' })}
-                          >
-                            Delete
-                          </button>
+                          <span className="ml-auto inline-flex items-center gap-1">
+                            <PinToggle
+                              item={question}
+                              onToggle={(pinned) => editor.edit({ type: 'pin', id: question.id, pinned })}
+                            />
+                            <button
+                              ref={(node) => {
+                                deleteButtons.current[question.id] = node;
+                              }}
+                              type="button"
+                              onClick={() => setConfirming(question)}
+                              aria-label={`Delete ${question.id}`}
+                              className={buttonClasses({ variant: 'ghost', size: 'sm' })}
+                            >
+                              Delete
+                            </button>
+                          </span>
                         </div>
 
                         <EditableText className="mt-1" rows={3} {...editable(question, 'prompt', 'prompt')}>

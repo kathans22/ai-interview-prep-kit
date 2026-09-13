@@ -39,7 +39,7 @@
  * next batch goes when the current one lands.
  */
 
-import { EDIT_FIELDS, applyLocalOps, currentValue, orderCategory } from './localOps.js';
+import { EDIT_FIELDS, applyLocalOps, currentPinned, currentValue, orderCategory } from './localOps.js';
 
 /** How long typing must pause before an edit is sent. */
 export const DEBOUNCE_MS = 800;
@@ -52,10 +52,12 @@ const DELETE_TYPES = Object.freeze(['delete-question', 'delete-flashcard']);
 /**
  * The identity two operations share when the later one should REPLACE the earlier, and
  * the handle undo and status look an operation up by. Field edits key on the field;
- * deletes key on the item. Anything else — an add — has no key and keeps its own place.
+ * deletes and pins key on the item. Anything else — an add, a move — has no key and
+ * keeps its own place.
  */
 export function opKey(op) {
   if (EDIT_FIELDS[op?.type]) return `${op.type}:${op.id ?? 'brief'}:${op.field}`;
+  if (op?.type === 'pin') return `pin:${op.id}`;
   if (DELETE_TYPES.includes(op?.type)) return `${op.type}:${op.id}`;
   return null;
 }
@@ -86,6 +88,12 @@ export function enqueue(state, op) {
  * generated item `edited` — protecting it from regeneration for a change nobody made.
  */
 export function isNoop(op, kit) {
+  // A pin toggled on and off again before it was sent merges, by key, into a pin that
+  // matches the kit — and sending it would still stamp the item as touched.
+  if (op?.type === 'pin') {
+    const pinned = currentPinned(kit, op.id);
+    return pinned !== undefined && pinned === (op.pinned !== false);
+  }
   if (!EDIT_FIELDS[op?.type]) return false;
   const value = currentValue(kit, op);
   // A target that no longer exists is NOT a no-op: the server must say it is gone.
