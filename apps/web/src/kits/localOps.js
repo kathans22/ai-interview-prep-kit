@@ -100,6 +100,22 @@ export function applyLocalOp(draft, op) {
       return draft;
     }
 
+    // A delete is drawn as a MARK, not a removal. The item stays in place flagged
+    // `pendingDelete`, so the screen can put an undo placeholder exactly where it was —
+    // and so undoing is just dropping the operation, with nothing to reinsert or reorder.
+    // The real removal arrives with the server's kit when the delete is finally sent.
+    case 'delete-question': {
+      const question = findById(draft.questions, op.id);
+      if (question) question.pendingDelete = true;
+      return draft;
+    }
+
+    case 'delete-flashcard': {
+      const card = findById(draft.flashcards, op.id);
+      if (card) card.pendingDelete = true;
+      return draft;
+    }
+
     case 'add-flashcard': {
       draft.flashcards = Array.isArray(draft.flashcards) ? draft.flashcards : [];
       if (!findById(draft.flashcards, op.tempId)) {

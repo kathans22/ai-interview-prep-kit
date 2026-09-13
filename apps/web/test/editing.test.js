@@ -14,14 +14,17 @@ import { markEdited } from '@aipk/core/contracts/provenance.js';
 
 import { applyLocalOps, currentValue } from '../src/kits/localOps.js';
 import {
+  UNDO_WINDOW_MS,
   cancel,
   confirm,
   createEditState,
   enqueue,
   fail,
   isNoop,
+  nextReleaseAt,
   opKey,
   pendingKeys,
+  releaseAll,
   takeBatch,
   toServerOp,
   viewOf,
@@ -235,6 +238,67 @@ test('a failed add rolls back its pending row', () => {
 
   state = fail(state);
   assert.equal(viewOf(state).questions.length, 2);
+});
+
+// --- deleting, with an undo window ------------------------------------------
+
+const NOW = 1_000_000;
+const heldDelete = { type: 'delete-question', id: 'q1', holdUntil: NOW + UNDO_WINDOW_MS };
+
+test('a delete is drawn as a mark in place, not a removal', () => {
+  const view = applyLocalOps(KIT, [heldDelete]);
+  assert.equal(view.questions.length, 2, 'the row stays, so the undo can sit where it was');
+  assert.equal(view.questions[0].pendingDelete, true);
+  assert.equal(KIT.questions[0].pendingDelete, undefined);
+});
+
+test('a held delete is NOT sent while it can still be undone', () => {
+  // The server has no undo for a deleted question. Undoable means not yet sent.
+  const state = enqueue(createEditState(KIT), heldDelete);
+  const { batch, state: after } = takeBatch(state, NOW + 1000);
+
+  assert.equal(batch.length, 0);
+  assert.equal(after.queued.length, 1, 'still waiting, still undoable');
+});
+
+test('once its window closes, the delete is sent', () => {
+  const state = enqueue(createEditState(KIT), heldDelete);
+  const { batch } = takeBatch(state, NOW + UNDO_WINDOW_MS + 1);
+  assert.equal(batch.length, 1);
+  assert.deepEqual(toServerOp(batch[0]), { type: 'delete-question', id: 'q1' }, 'the hold time never reaches the server');
+});
+
+test('undo inside the window removes the delete, so nothing is ever sent', () => {
+  let state = enqueue(createEditState(KIT), heldDelete);
+  state = cancel(state, opKey(heldDelete));
+
+  assert.equal(state.queued.length, 0);
+  assert.equal(viewOf(state).questions[0].pendingDelete, undefined, 'the row is back as it was');
+  assert.equal(takeBatch(state, NOW + UNDO_WINDOW_MS + 1).batch.length, 0);
+});
+
+test('a ready edit goes now while a held delete waits beside it', () => {
+  let state = enqueue(createEditState(KIT), heldDelete);
+  state = enqueue(state, editPrompt('q2', 'changed'));
+
+  const { batch, state: after } = takeBatch(state, NOW + 10);
+  assert.deepEqual(batch.map((op) => op.type), ['edit-question']);
+  assert.deepEqual(after.queued.map((op) => op.type), ['delete-question']);
+});
+
+test('the next release time is the earliest hold, and nothing when none is held', () => {
+  let state = createEditState(KIT);
+  assert.equal(nextReleaseAt(state, NOW), null);
+
+  state = enqueue(state, { type: 'delete-flashcard', id: 'f1', holdUntil: NOW + 9000 });
+  state = enqueue(state, heldDelete);
+  assert.equal(nextReleaseAt(state, NOW), NOW + UNDO_WINDOW_MS);
+});
+
+test('leaving the page ends every hold, so a confirmed delete is not silently dropped', () => {
+  const state = releaseAll(enqueue(createEditState(KIT), heldDelete));
+  const { batch } = takeBatch(state, NOW);
+  assert.equal(batch.length, 1, 'sent immediately, inside what would have been the window');
 });
 
 test('operations are translated into exactly what the edit route accepts', () => {

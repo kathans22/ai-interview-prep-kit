@@ -1,17 +1,21 @@
 /**
  * useKitEditor.js — edit a kit optimistically, without losing a keystroke.
  *
- * Decides: WHEN edits are sent — after typing pauses, one request at a time, and never
- * later than the moment the page is left.
+ * Decides: WHEN edits are sent — after typing pauses, when a delete's undo window closes,
+ * one request at a time, and never later than the moment the page is left.
  *
- * Does NOT decide: how edits merge, roll back or render. That is `editQueue.js`, which is
- * pure and tested on its own; this hook only supplies the timer, the network call and
- * React state around it.
+ * Does NOT decide: how edits merge, hold, roll back or render. That is `editQueue.js`,
+ * which is pure and tested on its own; this hook only supplies the timer, the network
+ * call and React state around it.
  *
  * A PENDING EDIT IS NEVER SILENTLY DROPPED. Leaving the page, or navigating away inside
- * the app, flushes whatever is waiting instead of discarding it. A debounce that loses
- * the last sentence someone typed because they clicked away within the delay is the
- * kind of bug that teaches people not to trust an editor.
+ * the app, releases every hold and flushes whatever is waiting instead of discarding it.
+ * A debounce that loses the last sentence someone typed, or an undo window that swallows
+ * a delete they confirmed, teaches people not to trust the editor.
+ *
+ * ONE TIMER, SET FOR WHICHEVER IS SOONER: typing's pause, or the earliest undo window
+ * closing. Two timers would race each other into two requests; one timer at the minimum
+ * sends everything that is ready in one.
  *
  * FAILURES ARE REPORTED, NOT SWALLOWED. `onError` receives the error and the operations
  * that were rolled back, and the builder shows it. A cancelled request is the one
@@ -25,13 +29,17 @@ import { isCancelled } from '../lib/apiError.js';
 import { currentValue } from '../kits/localOps.js';
 import {
   DEBOUNCE_MS,
+  UNDO_WINDOW_MS,
   cancel,
   confirm,
   createEditState,
   enqueue,
   fail,
+  isHeld,
+  nextReleaseAt,
   opKey,
   pendingKeys,
+  releaseAll,
   takeBatch,
   toServerOp,
   viewOf,
@@ -67,8 +75,31 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     }
   };
 
+  const flushRef = useRef(async () => {});
+
+  /**
+   * Arm the one timer for whatever is due soonest: the typing pause if anything ready is
+   * waiting, or the earliest undo window closing.
+   */
+  const schedule = useCallback(() => {
+    clearTimeout(timer.current);
+    timer.current = null;
+
+    const now = Date.now();
+    const current = stateRef.current;
+    const readyWaiting = current.queued.some((op) => !isHeld(op, now));
+    const release = nextReleaseAt(current, now);
+
+    let delay = readyWaiting ? DEBOUNCE_MS : null;
+    if (release !== null) {
+      const untilRelease = Math.max(0, release - now);
+      delay = delay === null ? untilRelease : Math.min(delay, untilRelease);
+    }
+    if (delay !== null) timer.current = setTimeout(() => flushRef.current(), delay);
+  }, []);
+
   // A different kit on the same component instance starts from that kit's data. Edits
-  // belonging to the previous kit were flushed by the unmount-style cleanup below.
+  // belonging to the previous kit were flushed by the leave-handling cleanup below.
   const seenKitId = useRef(kitId);
   useEffect(() => {
     if (seenKitId.current === kitId) return;
@@ -78,16 +109,15 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     set(createEditState(initialKit));
   }, [kitId, initialKit, set]);
 
-  const flushRef = useRef(async () => {});
-
   const flush = useCallback(async () => {
     clearTimeout(timer.current);
     timer.current = null;
     if (sending.current) return; // the in-flight request reschedules on landing
 
-    const { state: next, batch } = takeBatch(stateRef.current);
+    const { state: next, batch } = takeBatch(stateRef.current, Date.now());
     if (batch.length === 0) {
       if (next !== stateRef.current) set(next);
+      schedule(); // held deletes still need their window to close
       return;
     }
 
@@ -104,12 +134,10 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
       if (!isCancelled(error)) onErrorRef.current?.(error, batch);
     } finally {
       sending.current = false;
-      // Anything typed while that request was out goes next, after the usual pause.
-      if (stateRef.current.queued.length > 0 && !timer.current) {
-        timer.current = setTimeout(() => flushRef.current(), DEBOUNCE_MS);
-      }
+      // Anything typed, or held, while that request was out goes next.
+      if (stateRef.current.queued.length > 0) schedule();
     }
-  }, [kitId, set]);
+  }, [kitId, set, schedule]);
 
   flushRef.current = flush;
 
@@ -117,10 +145,9 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
   const edit = useCallback(
     (op) => {
       set(enqueue(stateRef.current, op));
-      clearTimeout(timer.current);
-      timer.current = setTimeout(() => flushRef.current(), DEBOUNCE_MS);
+      schedule();
     },
-    [set]
+    [set, schedule]
   );
 
   /**
@@ -130,8 +157,8 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
    * SENT AT ONCE, NOT AFTER THE DEBOUNCE. The debounce exists to merge keystrokes into
    * one edit. An add is one deliberate action with nothing to merge, and until it lands
    * the new row is read-only — so every millisecond of delay is a millisecond the person
-   * cannot touch what they just made. Anything already waiting goes out with it, which
-   * only ever sends an edit sooner.
+   * cannot touch what they just made. Anything already waiting and ready goes out with
+   * it, which only ever sends an edit sooner.
    */
   const add = useCallback(
     (op) =>
@@ -143,6 +170,33 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
         flushRef.current();
       }),
     [set]
+  );
+
+  /**
+   * Delete a question or a flashcard — after a delay during which it can be undone.
+   * Nothing is sent until the window closes; see "a delete is held" in `editQueue.js`.
+   */
+  const remove = useCallback(
+    (op) => {
+      set(enqueue(stateRef.current, { ...op, holdUntil: Date.now() + UNDO_WINDOW_MS }));
+      schedule();
+    },
+    [set, schedule]
+  );
+
+  /**
+   * Undo a delete that has not been sent. Returns false if it already has — at that point
+   * the item is gone on the server, and pretending otherwise would be the worse outcome.
+   */
+  const undoRemove = useCallback(
+    (op) => {
+      const key = opKey(op);
+      if (!stateRef.current.queued.some((entry) => opKey(entry) === key)) return false;
+      set(cancel(stateRef.current, key));
+      schedule();
+      return true;
+    },
+    [set, schedule]
   );
 
   /**
@@ -168,15 +222,19 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     [set, edit]
   );
 
-  // Never lose a waiting edit: flush when the page is hidden, and when the builder goes.
+  // Never lose a waiting edit or a confirmed delete: when the page is hidden, or the
+  // builder goes, every hold ends and everything waiting is sent.
   useEffect(() => {
-    const onHide = () => flushRef.current();
-    window.addEventListener('pagehide', onHide);
-    return () => {
-      window.removeEventListener('pagehide', onHide);
+    const leave = () => {
+      set(releaseAll(stateRef.current));
       flushRef.current();
     };
-  }, []);
+    window.addEventListener('pagehide', leave);
+    return () => {
+      window.removeEventListener('pagehide', leave);
+      leave();
+    };
+  }, [set]);
 
   const kit = useMemo(() => viewOf(state), [state]);
   const keys = useMemo(() => pendingKeys(state), [state]);
@@ -191,5 +249,5 @@ export function useKitEditor(kitId, initialKit, { onError } = {}) {
     [keys]
   );
 
-  return { kit, edit, add, revert, statusOf, flush: () => flushRef.current() };
+  return { kit, edit, add, remove, undoRemove, revert, statusOf, flush: () => flushRef.current() };
 }

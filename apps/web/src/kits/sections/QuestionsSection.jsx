@@ -2,7 +2,8 @@
  * QuestionsSection.jsx — the question bank, grouped by category, editable in place.
  *
  * Decides: how questions are grouped and laid out, that every category is shown —
- * including an empty one — and which parts of a question can be edited or added here.
+ * including an empty one — and which parts of a question can be edited, added or deleted
+ * here.
  *
  * Does NOT decide: which category a question belongs in, how hard it is, or how an edit
  * is saved. Grouping is `groupQuestions`; saving is the editor passed in.
@@ -17,9 +18,13 @@
  * id it has never heard of. The row says "Adding…" rather than offering controls that
  * would fail.
  *
- * FOCUS RETURNS TO THE ADD BUTTON when the form closes, whether it was cancelled or the
- * question was saved — otherwise it drops to the top of the page and a keyboard user has
- * to find their place again.
+ * DELETING ASKS FIRST, THEN CAN STILL BE TAKEN BACK. The dialog catches the slip of a
+ * finger; the undo window catches the second thought. A deleted question leaves a
+ * placeholder in its place for the window, and focus moves onto its Undo button.
+ *
+ * FOCUS NEVER DROPS TO THE TOP OF THE PAGE. It returns to the Add button when the form
+ * closes, to the Delete button after an undo, and — when the undo window closes under a
+ * focused Undo button — to the category's Add button, which is always there.
  *
  * THE ANSWER OUTLINE IS BEHIND A DISCLOSURE. Twenty-odd questions each with a paragraph
  * of outline is a wall at 360px. A native `<details>` is keyboard-operable and announced
@@ -27,18 +32,23 @@
  * an empty one can be written.
  */
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import { buttonClasses } from '../../ui/Button.jsx';
 import Card from '../../ui/Card.jsx';
+import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import SectionState from '../../ui/SectionState.jsx';
 import AddQuestionForm from '../AddQuestionForm.jsx';
+import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
 import EditableText from '../EditableText.jsx';
 import { DIFFICULTY_LABELS, deriveSectionState, groupQuestions, indexRequirements } from '../kitView.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
 
 /** The field operation for one question field, without its value. */
 const fieldOp = (id, field) => ({ type: 'edit-question', id, field });
+const deleteOp = (id) => ({ type: 'delete-question', id });
+
+const countVisible = (list) => list.filter((question) => !question.pendingDelete).length;
 
 export default function QuestionsSection({ kit, editor }) {
   const questions = kit?.questions;
@@ -51,11 +61,40 @@ export default function QuestionsSection({ kit, editor }) {
   const addButtons = useRef({});
   const focusAddButton = (category) => requestAnimationFrame(() => addButtons.current[category]?.focus());
 
+  const [confirming, setConfirming] = useState(null);
+  const [justDeleted, setJustDeleted] = useState(null);
+  const deleteButtons = useRef({});
+
+  // When the undo window closes, the Undo button goes. If it had focus, the browser drops
+  // focus to the page body; put it somewhere stable instead. Once the question is really
+  // gone, there is nothing left to track.
+  const justDeletedUndoable = justDeleted ? editor.statusOf(deleteOp(justDeleted.id)) === 'queued' : false;
+  const justDeletedExists = justDeleted ? (questions ?? []).some((q) => q.id === justDeleted.id) : false;
+  useEffect(() => {
+    if (!justDeleted || justDeletedUndoable) return;
+    if (!document.activeElement || document.activeElement === document.body) focusAddButton(justDeleted.category);
+    if (!justDeletedExists) setJustDeleted(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [justDeleted, justDeletedUndoable, justDeletedExists]);
+
   async function submitQuestion(op) {
     // Rejects on failure, which leaves the form open with the text still in it.
     await editor.add(op);
     setAdding(null);
     focusAddButton(op.category);
+  }
+
+  function confirmDelete() {
+    if (!confirming) return;
+    editor.remove(deleteOp(confirming.id));
+    setJustDeleted({ id: confirming.id, category: confirming.category });
+    setConfirming(null);
+  }
+
+  function undoDelete(question) {
+    if (!editor.undoRemove(deleteOp(question.id))) return;
+    setJustDeleted(null);
+    requestAnimationFrame(() => deleteButtons.current[question.id]?.focus());
   }
 
   /** Props that make one question field editable through the shared editor. */
@@ -71,36 +110,65 @@ export default function QuestionsSection({ kit, editor }) {
   };
 
   return (
-    <Card title={`Question bank${present ? ` (${questions.length})` : ''}`} titleAs="h2">
+    <Card title={`Question bank${present ? ` (${countVisible(questions)})` : ''}`} titleAs="h2">
       <SectionState status={state.status} error={state.error}>
         <div className="space-y-6">
           {groups.map((group) => (
             <section key={group.category} aria-labelledby={`questions-${group.category}`}>
               <h3 id={`questions-${group.category}`} className="text-sm font-semibold text-slate-900">
-                {group.label} <span className="font-normal text-slate-500">({group.questions.length})</span>
+                {group.label} <span className="font-normal text-slate-500">({countVisible(group.questions)})</span>
               </h3>
 
               {group.questions.length === 0 ? (
                 <p className="mt-2 text-sm text-slate-500">No {group.label.toLowerCase()} questions yet.</p>
               ) : (
                 <ol className="mt-2 space-y-2">
-                  {group.questions.map((question) =>
-                    question.pendingAdd ? (
-                      <li key={question.id} className="rounded-md border border-dashed border-slate-300 p-3">
-                        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                          <span>Adding…</span>
-                          <ProvenanceBadges item={question} />
-                        </div>
-                        <p className="mt-1 whitespace-pre-line break-words text-sm font-medium text-slate-700">
-                          {question.prompt}
-                        </p>
-                      </li>
-                    ) : (
+                  {group.questions.map((question) => {
+                    if (question.pendingDelete) {
+                      return (
+                        <li key={question.id}>
+                          <DeletedPlaceholder
+                            id={question.id}
+                            noun="question"
+                            undoable={editor.statusOf(deleteOp(question.id)) === 'queued'}
+                            onUndo={() => undoDelete(question)}
+                            autoFocus={justDeleted?.id === question.id}
+                          />
+                        </li>
+                      );
+                    }
+
+                    if (question.pendingAdd) {
+                      return (
+                        <li key={question.id} className="rounded-md border border-dashed border-slate-300 p-3">
+                          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                            <span>Adding…</span>
+                            <ProvenanceBadges item={question} />
+                          </div>
+                          <p className="mt-1 whitespace-pre-line break-words text-sm font-medium text-slate-700">
+                            {question.prompt}
+                          </p>
+                        </li>
+                      );
+                    }
+
+                    return (
                       <li key={question.id} className="rounded-md border border-slate-200 p-3">
                         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                           <span className="font-mono">{question.id}</span>
                           <span>{DIFFICULTY_LABELS[question.difficulty] ?? `Difficulty ${question.difficulty}`}</span>
                           <ProvenanceBadges item={question} />
+                          <button
+                            ref={(node) => {
+                              deleteButtons.current[question.id] = node;
+                            }}
+                            type="button"
+                            onClick={() => setConfirming(question)}
+                            aria-label={`Delete ${question.id}`}
+                            className={buttonClasses({ variant: 'ghost', size: 'sm', className: 'ml-auto' })}
+                          >
+                            Delete
+                          </button>
                         </div>
 
                         <EditableText className="mt-1" rows={3} {...editable(question, 'prompt', 'prompt')}>
@@ -127,8 +195,8 @@ export default function QuestionsSection({ kit, editor }) {
                           </EditableText>
                         </details>
                       </li>
-                    )
-                  )}
+                    );
+                  })}
                 </ol>
               )}
 
@@ -159,6 +227,17 @@ export default function QuestionsSection({ kit, editor }) {
           ))}
         </div>
       </SectionState>
+
+      <ConfirmDialog
+        open={Boolean(confirming)}
+        onClose={() => setConfirming(null)}
+        onConfirm={confirmDelete}
+        title="Delete this question?"
+        description="You can undo it for a few seconds afterwards."
+        confirmLabel="Delete the question"
+      >
+        <p className="whitespace-pre-line break-words">{confirming?.prompt || 'A question with no prompt yet.'}</p>
+      </ConfirmDialog>
     </Card>
   );
 }
