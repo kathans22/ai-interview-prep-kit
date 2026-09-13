@@ -79,6 +79,7 @@ import {
 import { planMove, planStep, positionAfter } from '../reorder.js';
 import { useQuestionDrag } from '../useQuestionDrag.js';
 import ProvenanceBadges from './ProvenanceBadges.jsx';
+import AnswerScorePanel from './AnswerScorePanel.jsx';
 
 /** The field operation for one question field, without its value. */
 const fieldOp = (id, field) => ({ type: 'edit-question', id, field });
@@ -355,6 +356,8 @@ export default function QuestionsSection({ kit, editor, regeneration, onRegenera
                             </p>
                           </EditableText>
                         </details>
+
+                        {!question.pendingDelete ? <AnswerScorePanel question={question} /> : null}
 
                         <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2">
                           {['up', 'down'].map((direction) => {
