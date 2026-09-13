@@ -19,6 +19,13 @@ import {
   settleRating,
 } from '../src/practice/session.js';
 import { RATINGS, ratingFor } from '../src/practice/ratings.js';
+import { RATING_VALUES } from '@aipk/core/practice/orderCards.js';
+
+test('the client\'s four answers are recorded as exactly the numbers core orders by', () => {
+  // The words live in the client and the ordering in core; a rating recorded under a
+  // number core reads differently would silently put the wrong cards first.
+  assert.deepEqual(Object.fromEntries(RATINGS.map((rating) => [rating.key, rating.value])), RATING_VALUES);
+});
 
 test('a session starts on the first card with its answer hidden', () => {
   const session = createSession(['f1', 'f2', 'f3']);

@@ -10,7 +10,8 @@
     "./llm/*": "./llm/*",
     "./retrieval/*": "./retrieval/*",
     "./generation/*": "./generation/*",
-    "./orchestrator/*": "./orchestrator/*"
+    "./orchestrator/*": "./orchestrator/*",
+    "./practice/*": "./practice/*"
   },
   "dependencies": {
     "@google/genai": "^2.21.0"
