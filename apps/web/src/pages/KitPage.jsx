@@ -1,22 +1,27 @@
 /**
- * KitPage.jsx — one kit: its build, and what came of it.
+ * KitPage.jsx — one kit: its build, and then the kit itself.
  *
- * Decides: which of the three things this screen shows — a build in progress, a finished
- * kit, or a failure — and nothing about their contents.
+ * Decides: which of three things this screen shows — a build in progress, a failure, or a
+ * finished kit laid out section by section — and nothing about their contents.
  *
- * Does NOT decide: what a step means (`steps.js`), how progress arrives
- * (`useProgress`), or what a kit looks like once it is ready. The kit's own content is a
- * later stage's; this screen currently confirms it exists and points at it.
+ * Does NOT decide: what a step means (`steps.js`), how progress arrives (`useProgress`),
+ * or how a section renders (`KitBuilder` and its sections, each with its own
+ * `SectionState`).
  *
  * A BUILD IS NOT A SPINNER. It takes minutes and up to twelve model calls, and parts of
- * it can degrade or be skipped while the rest succeeds. A single spinner would throw all
- * of that away and leave the user unable to tell a slow crawl from a dead server — so
- * the step list is the primary content of this screen while a kit is building.
+ * it can degrade or be skipped while the rest succeeds. While it runs, the step list is
+ * the screen. Once it is done, the KIT is the screen — and the build's history moves into
+ * a disclosure rather than disappearing, because "what did it skip, and why" is still a
+ * question someone reading the kit will ask.
  *
  * TWO KINDS OF FAILURE, KEPT APART. A failed REQUEST (the kit could not be read) is not
  * a failed BUILD (the kit exists and could not be produced). The first is `SectionState`
  * around the fetch; the second is the kit's own recorded error. Showing one as the other
  * would tell someone to retry a request that worked fine.
+ *
+ * THE PAGE-LEVEL STATE ANSWERS ONE QUESTION: what is this kit? Until the kit's status is
+ * known the page cannot tell a build from a finished kit, so that single question gets a
+ * single loading state. Everything after it is per section.
  */
 
 import { useEffect, useRef } from 'react';
@@ -28,6 +33,8 @@ import SectionState from '../ui/SectionState.jsx';
 import { useToast } from '../ui/ToastProvider.jsx';
 import { useKit, useResumeKit } from '../hooks/useKits.js';
 import { STREAM_STATES, describeConnection, useProgress } from '../hooks/useProgress.js';
+import BuildNotes from '../kits/BuildNotes.jsx';
+import KitBuilder from '../kits/KitBuilder.jsx';
 import ProgressSteps from '../kits/ProgressSteps.jsx';
 import { describeKit, describeResume } from '../kits/kitStatus.js';
 import { deriveSteps, summarise } from '../kits/steps.js';
@@ -36,7 +43,7 @@ const FINISHED = new Set(['ready', 'failed']);
 
 export default function KitPage() {
   const { id } = useParams();
-  const { status, progress, buildError, input, hasCheckpoint, requestStatus, error, reload } = useKit(id);
+  const { kit, status, progress, buildError, input, hasCheckpoint, requestStatus, error, reload } = useKit(id);
 
   // The stream runs alongside the fetch. Whichever lands first does not discard the
   // other — the hook merges by entry identity.
@@ -64,8 +71,7 @@ export default function KitPage() {
   // status comes from a single `state` frame sent when the connection opens, so it is
   // fresher than the snapshot early on — and permanently stale afterwards. Once the kit
   // record itself reports a terminal status, that record wins; before then the stream
-  // does. Preferring the stream unconditionally leaves a finished build reading "12 of
-  // 15 steps done" forever, with every row resolved above it.
+  // does.
   const liveStatus = FINISHED.has(status) ? status : (stream.status ?? status);
   const steps = deriveSteps(stream.progress);
   const connectionNotice = describeConnection(stream.connection);
@@ -88,9 +94,13 @@ export default function KitPage() {
     reload().catch(() => {});
   }
 
+  const ready = liveStatus === 'ready' && Boolean(kit);
+
   return (
     <section>
-      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Kit</h1>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+        {ready && kit.role?.title ? kit.role.title : 'Kit'}
+      </h1>
       {input?.company_url ? (
         <p className="mt-1 truncate text-sm text-slate-600">{input.company_url}</p>
       ) : (
@@ -102,15 +112,13 @@ export default function KitPage() {
         error={error}
         onRetry={reload}
         loadingLabel="Loading this kit…"
-        // Once the kit has been read once, a re-read must not replace the step list
-        // with a spinner — the user is watching it.
+        // Once the kit has been read once, a re-read must not replace what is on screen
+        // with a spinner — the user is reading or editing it.
         hasContent={Boolean(status)}
       >
         <div className="mt-6 space-y-6">
-          {/* How progress is arriving, but only when that is not the happy path. A badge
-              reading "Connected" is noise; its absence is what makes "the live
-              connection dropped" noticeable. Not a live region — the step list is the
-              one on this screen, and a second would announce everything twice. */}
+          {/* How progress is arriving, but only when that is not the happy path. Not a
+              live region — the step list is the one on this screen. */}
           {connectionNotice && !FINISHED.has(liveStatus) ? (
             <p
               className={
@@ -123,28 +131,38 @@ export default function KitPage() {
             </p>
           ) : null}
 
-          <Card title={summarise(steps, liveStatus)} titleAs="h2">
-            <ProgressSteps steps={steps} busy={!FINISHED.has(liveStatus)} />
-          </Card>
+          {ready ? (
+            <>
+              <KitBuilder kit={kit} />
+
+              {/* The build's history, kept rather than discarded: what it skipped and why
+                  is still a question someone reading the finished kit will ask. */}
+              <details className="rounded-lg border border-slate-200 bg-white">
+                <summary className="cursor-pointer px-4 py-3 text-sm font-medium text-slate-900">
+                  How this kit was built — {summarise(steps, liveStatus)}
+                </summary>
+                <div className="space-y-5 border-t border-slate-200 px-4 py-4">
+                  <BuildNotes kit={kit} />
+                  <ProgressSteps steps={steps} busy={false} />
+                </div>
+              </details>
+            </>
+          ) : (
+            <Card title={summarise(steps, liveStatus)} titleAs="h2">
+              <ProgressSteps steps={steps} busy={!FINISHED.has(liveStatus)} />
+            </Card>
+          )}
 
           {/* The build's own failure, distinct from a request failure — and never a dead
-              end. An interrupted build and a genuinely failed one get different words
-              because they mean different things to the person reading them. */}
+              end. An interrupted build and a genuinely failed one get different words. */}
           {liveStatus === 'failed' ? (
             <Card title={described.view === 'interrupted' ? 'This build was interrupted' : 'This kit could not be built'} titleAs="h2">
               <p className="text-sm text-slate-700">{described.detail}</p>
-
-              {/* The code stays visible in small print: it is what makes a support
-                  conversation possible, and the sentence above is what a person acts on. */}
               {buildError?.code ? <p className="mt-2 font-mono text-xs text-slate-500">{buildError.code}</p> : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                {/* TWO GENUINELY DIFFERENT ACTIONS, and they are only different because
-                    the server grew a `fresh` flag to make them so. "Continue" reuses the
-                    checkpoint; "Start over" discards it and rebuilds. The first is only
-                    OFFERED when there is a checkpoint to reuse — a button promising to
-                    skip completed work when there is none to skip is a promise the user
-                    pays for in quota to discover. */}
+                {/* Two genuinely different actions, offered only when there is a
+                    checkpoint to choose between (D-151). */}
                 {hasCheckpoint ? (
                   <>
                     <Button onClick={() => handleResume({ fresh: false })} disabled={resuming}>
@@ -160,12 +178,6 @@ export default function KitPage() {
                   </Button>
                 )}
 
-                {/* The honest second option. The server has ONE continue mechanism — it
-                    resumes from a checkpoint if there is one and starts over if not — and
-                    this page cannot rebuild the original submission because the API
-                    returns the description's length, not its text. So rather than a
-                    second button that secretly does the same thing, this is a link to
-                    start a fresh kit, which is what "retry from scratch" honestly is. */}
                 <Link to="/kits/new" className={buttonClasses({ variant: 'ghost' })}>
                   Build a different posting
                 </Link>
@@ -175,16 +187,6 @@ export default function KitPage() {
                 {hasCheckpoint
                   ? 'Continuing skips the steps that already finished, so it spends less of the daily model quota. Starting over discards that saved progress.'
                   : 'No checkpoint was saved for this kit, so this builds again from the start.'}
-              </p>
-            </Card>
-          ) : null}
-
-          {liveStatus === 'ready' ? (
-            <Card title="The kit is ready" titleAs="h2">
-              <p className="text-sm text-slate-700">
-                Requirements, questions, flashcards and a day-by-day schedule were produced. Any step above
-                marked partial or skipped is explained on its own row — the kit is complete, with those gaps
-                recorded rather than hidden.
               </p>
             </Card>
           ) : null}
