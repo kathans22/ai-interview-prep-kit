@@ -392,6 +392,40 @@ test('EXIT CHECK: a PATCH with a stale revision returns 409, not a silent overwr
   assert.equal(current.body.kit.questions.find((entry) => entry.id === 'q1').prompt, 'THE FIRST EDIT');
 });
 
+test('a stale edit aimed at a question deleted since is a 409 with the current kit, not a 400', async () => {
+  // Found by the builder's conflict check: the operations used to be judged before the
+  // revision, so an edit to a question another tab had deleted came back "No question
+  // with id" — a 400 the client rolls back on — instead of the conflict it really was.
+  const alice = client();
+  await alice.signUp('stale-deleted@example.com');
+  const kitId = await giveKitTo('stale-deleted@example.com');
+  const staleRevision = (await alice.call(`/api/kits/${kitId}`)).body.revision;
+
+  const deleted = await alice.call(`/api/kits/${kitId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ revision: staleRevision, ops: [{ type: 'delete-question', id: 'q2' }] }),
+  });
+  assert.equal(deleted.status, 200, JSON.stringify(deleted.body));
+
+  const late = await alice.call(`/api/kits/${kitId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ revision: staleRevision, ops: [{ type: 'edit-question', id: 'q2', prompt: 'too late' }] }),
+  });
+
+  assert.equal(late.status, 409, JSON.stringify(late.body));
+  assert.equal(late.body.error.code, 'STALE_REVISION');
+  assert.equal(late.body.error.currentRevision, staleRevision + 1);
+  assert.ok(late.body.error.kit, 'the conflict carries the kit to reapply onto');
+  assert.equal(late.body.error.kit.questions.some((entry) => entry.id === 'q2'), false, 'and it is the current kit');
+
+  // With the current revision, the same operation is judged — and refused — as before.
+  const judged = await alice.call(`/api/kits/${kitId}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ revision: staleRevision + 1, ops: [{ type: 'edit-question', id: 'q2', prompt: 'too late' }] }),
+  });
+  assert.equal(judged.status, 400);
+});
+
 test('an edit marks provenance, so a later regeneration cannot overwrite it', async () => {
   const alice = client();
   await alice.signUp('provenance@example.com');

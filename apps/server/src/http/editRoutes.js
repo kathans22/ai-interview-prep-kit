@@ -40,6 +40,7 @@ import { ID_PREFIXES, QUESTION_CATEGORIES } from '@aipk/core/contracts/kitSchema
 
 import { route, ApiError } from './errors.js';
 import { validateRevision } from './validate.js';
+import { StaleRevisionError } from '../models/revisions.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
 import { writeKitChecked } from './writeKit.js';
 
@@ -289,6 +290,23 @@ export function mountEditRoutes(app) {
       }
       if (ops.length > MAX_OPS) {
         throw new ApiError('VALIDATION_FAILED', `ops may contain at most ${MAX_OPS} operations.`);
+      }
+
+      // A STALE REQUEST IS ANSWERED AS STALE BEFORE ITS OPERATIONS ARE JUDGED. They were
+      // written against an older kit, so "no question with id q5" may only mean another
+      // tab deleted q5 since. Judged first, that is a 400 — and a client rolls back work
+      // on a 400, where a 409 carrying the current kit lets it reapply what still applies.
+      // The kit `withOwnedKit` loaded for this request is the current one, at exactly
+      // this revision, so it is the right kit to hand back. The write below still checks
+      // the revision atomically; this only makes the early answer the honest one.
+      if (Number.isInteger(kitDoc.revision) && kitDoc.revision !== revision) {
+        const stale = new StaleRevisionError({
+          expected: revision,
+          current: kitDoc.revision,
+          kitId: String(kitDoc.id ?? kitDoc._id),
+        });
+        stale.kit = kitDoc.kit;
+        throw stale;
       }
 
       // Applied to a clone. If any operation fails, the caller's kit is untouched and
