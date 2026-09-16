@@ -26,6 +26,8 @@ import { mountKitRoutes } from '../src/http/kitRoutes.js';
 import { mountEditRoutes } from '../src/http/editRoutes.js';
 import { mountRegenerateRoutes } from '../src/http/regenerateRoutes.js';
 import { mountPracticeRoutes } from '../src/http/practiceRoutes.js';
+import { mountScoreRoutes } from '../src/http/scoreRoutes.js';
+import { LlmError, LLM_ERROR_CODES } from '@aipk/core/llm/provider.js';
 import { mountProgressRoutes } from '../src/http/progressRoutes.js';
 import { sessionMiddleware, SESSION_COOKIE, encodeSession } from '../src/auth/session.js';
 import { createMemoryStore } from '../src/store/memoryStore.js';
@@ -156,6 +158,9 @@ async function giveKitTo(email) {
   return String(record.id);
 }
 
+/** Every scoring request the fake provider saw, so a test can check what was sent. */
+const scoreCalls = [];
+
 before(async () => {
   store = createMemoryStore();
 
@@ -164,6 +169,35 @@ before(async () => {
     name: 'fake',
     model: 'fake',
     async complete(request) {
+      // Scoring a typed answer: a requirement is "hit" when the answer mentions its id,
+      // which lets each test choose its verdicts. BLOCK_ME simulates a safety block.
+      if (request.step === 'answer-score') {
+        scoreCalls.push(request);
+        const [criteria = '', answerBlock = ''] = String(request.contents).split('<<<UNTRUSTED_DATA_BEGIN>>>').slice(1);
+        if (answerBlock.includes('BLOCK_ME')) {
+          // A typed, non-retryable error, as a real provider raises. A plain Error with a
+          // code is treated by the retry layer as an unknown transport fault — retried
+          // with backoff and reported as LLM_UNAVAILABLE, which is right for an unknown.
+          throw new LlmError(LLM_ERROR_CODES.CONTENT_BLOCKED, 'Simulated safety block.', {
+            step: request.step,
+            retryable: false,
+          });
+        }
+        const scoped = [...criteria.matchAll(/id: (r\d+)/g)].map((match) => match[1]);
+        return {
+          data: {
+            requirements: scoped.map((id) => ({
+              requirement_id: id,
+              verdict: answerBlock.includes(id) ? 'hit' : 'missed',
+              reason: 'test verdict',
+            })),
+            outline_points: [],
+            improvement: 'Name the measurable outcome of what you did.',
+          },
+          raw: null,
+          text: '',
+        };
+      }
       const ids = [...String(request.contents).matchAll(/id: (r\d+)/g)].map((match) => match[1]);
       return {
         data: {
@@ -203,6 +237,7 @@ before(async () => {
     mountEditRoutes(instance);
     mountRegenerateRoutes(instance);
     mountPracticeRoutes(instance);
+    mountScoreRoutes(instance);
   });
   app.finalise();
 
@@ -235,6 +270,7 @@ test('EXIT CHECK: signed out, every kit endpoint returns 401', async () => {
     ['POST', '/api/kits/anything/resume', null],
     ['POST', '/api/kits/anything/practice', { questionId: 'q1', confidence: 3 }],
     ['GET', '/api/kits/anything/practice', null],
+    ['POST', '/api/kits/anything/questions/q1/score', { answer: 'an answer long enough to be scored' }],
     ['DELETE', '/api/kits/anything', null],
   ];
 
@@ -292,6 +328,7 @@ test("EXIT CHECK: a kit created by user A is invisible to user B", async () => {
     ['POST', `/api/kits/${kitId}/regenerate`, { section: 'questions', category: 'technical', revision: 1 }],
     ['POST', `/api/kits/${kitId}/resume`, null],
     ['POST', `/api/kits/${kitId}/practice`, { questionId: 'q1', confidence: 3 }],
+    ['POST', `/api/kits/${kitId}/questions/q1/score`, { answer: 'an answer long enough to be scored' }],
     ['DELETE', `/api/kits/${kitId}`, null],
   ];
 
@@ -1271,6 +1308,98 @@ test('the practice read serves the deck least confident first, unseen cards in t
     ],
     'again first, the unseen card next, easy last'
   );
+});
+
+// ===========================================================================
+// Scoring a typed answer
+// ===========================================================================
+
+/** POST an answer to one question and return the response. */
+function scoreAnswerFor(who, kitId, questionId, answer) {
+  return who.call(`/api/kits/${kitId}/questions/${questionId}/score`, { method: 'POST', body: JSON.stringify({ answer }) });
+}
+
+test('a typed answer is scored against its question, and the verdict — not the answer — is recorded', async () => {
+  const alice = client();
+  await alice.signUp('score@example.com');
+  const kitId = await giveKitTo('score@example.com');
+  const before = (await alice.call(`/api/kits/${kitId}`)).body.revision;
+
+  const answer = 'I built the dashboard in React and measured the render cost first (r1).';
+  const response = await scoreAnswerFor(alice, kitId, 'q1', answer);
+
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(response.body.result.hitRequirementIds, ['r1']);
+  assert.deepEqual(response.body.result.missedRequirementIds, []);
+  assert.equal(response.body.result.improvement, 'Name the measurable outcome of what you did.');
+  assert.equal(response.body.id, kitId);
+  assert.equal(response.body.revision, before + 1, 'the new revision is returned so the client ledger follows it');
+  assert.equal(response.body.budget.spent, 1);
+
+  const stored = (await store.kits.findById(kitId)).scores;
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].questionId, 'q1');
+  assert.deepEqual(stored[0].verdicts, [{ requirementId: 'r1', verdict: 'hit' }]);
+  assert.ok(!JSON.stringify(stored).includes('dashboard'), 'the typed answer itself is not stored');
+});
+
+test('only the requirements the question covers are sent to be scored against', async () => {
+  const alice = client();
+  await alice.signUp('score-scope@example.com');
+  const kitId = await giveKitTo('score-scope@example.com');
+  scoreCalls.length = 0;
+
+  await scoreAnswerFor(alice, kitId, 'q1', 'An answer about React that mentions nothing else at all.');
+
+  assert.equal(scoreCalls.length, 1);
+  assert.ok(scoreCalls[0].contents.includes('5+ years with React'), "q1's requirement is sent");
+  assert.ok(!scoreCalls[0].contents.includes('Mentoring juniors'), 'r2 belongs to q2 and is not');
+});
+
+test('a missed requirement is recorded as missed', async () => {
+  const alice = client();
+  await alice.signUp('score-miss@example.com');
+  const kitId = await giveKitTo('score-miss@example.com');
+
+  const response = await scoreAnswerFor(alice, kitId, 'q2', 'I prefer to work alone and ship quickly without reviews.');
+  assert.equal(response.status, 200, JSON.stringify(response.body));
+  assert.deepEqual(response.body.result.missedRequirementIds, ['r2']);
+  assert.deepEqual((await store.kits.findById(kitId)).scores[0].missedRequirementIds, ['r2']);
+});
+
+test('an answer that cannot be scored is refused before any call, and nothing is recorded', async () => {
+  const alice = client();
+  await alice.signUp('score-bad@example.com');
+  const kitId = await giveKitTo('score-bad@example.com');
+  scoreCalls.length = 0;
+
+  const short = await scoreAnswerFor(alice, kitId, 'q1', 'too short');
+  assert.equal(short.status, 400);
+  assert.equal(short.body.error.code, 'GENERATION_BAD_INPUT');
+  assert.equal(short.body.error.details.reason, 'ANSWER_TOO_SHORT');
+  assert.ok(!short.body.error.message.startsWith('answer-score'), 'the message is written for a person');
+
+  const missing = await alice.call(`/api/kits/${kitId}/questions/q1/score`, { method: 'POST', body: JSON.stringify({}) });
+  assert.equal(missing.status, 400);
+  assert.equal(missing.body.error.code, 'VALIDATION_FAILED');
+
+  const unknown = await scoreAnswerFor(alice, kitId, 'q99', 'An answer long enough to be scored for sure.');
+  assert.equal(unknown.status, 404);
+
+  assert.equal(scoreCalls.length, 0, 'no model call was made for any of them');
+  assert.equal((await store.kits.findById(kitId)).scores.length, 0);
+});
+
+test('a scoring call that fails records nothing and says why, without leaking its cause', async () => {
+  const alice = client();
+  await alice.signUp('score-fail@example.com');
+  const kitId = await giveKitTo('score-fail@example.com');
+
+  const response = await scoreAnswerFor(alice, kitId, 'q1', 'BLOCK_ME — an answer the provider refuses to read.');
+  assert.equal(response.status, 422, JSON.stringify(response.body));
+  assert.equal(response.body.error.code, 'LLM_CONTENT_BLOCKED');
+  assert.equal(response.body.error.details, undefined, 'the underlying error stays in the log');
+  assert.equal((await store.kits.findById(kitId)).scores.length, 0, 'a failure is not evidence of a weak area');
 });
 
 test('rate limiting refuses with a retry hint rather than failing opaquely', async () => {

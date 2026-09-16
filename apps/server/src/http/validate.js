@@ -165,6 +165,23 @@ export function validateRegenerate(body, { sections, categories }) {
   return { section, category: category || null, revision: validateRevision(body.revision) };
 }
 
+/**
+ * The body of POST /api/kits/:id/questions/:questionId/score.
+ *
+ * Only the shape is checked here. How long an answer may be is core's rule
+ * (`scoreAnswer`), stated once, and a too-short or too-long answer is refused there before
+ * any model call is made.
+ */
+export function validateScoreAnswer(body) {
+  const check = createChecker();
+  if (!isPlainObject(body)) throw new ApiError('VALIDATION_FAILED', 'Request body must be a JSON object.');
+
+  if (typeof body.answer !== 'string') check.fail('answer', 'is required, as text.');
+
+  check.done();
+  return { answer: body.answer };
+}
+
 /** A flashcard is rated again (1), hard (2), good (3) or easy (4). */
 export const CARD_CONFIDENCE_MAX = 4;
 

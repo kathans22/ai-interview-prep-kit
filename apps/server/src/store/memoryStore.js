@@ -70,6 +70,7 @@ export function createMemoryStore({ now = () => new Date() } = {}) {
         previousSections: { company_brief: null, questions: null, flashcards: null, schedule: null },
         pageCache: null,
         practice: [],
+        scores: [],
         error: { code: null, message: null, at: null },
         createdAt: now(),
         updatedAt: now(),

@@ -257,6 +257,32 @@ function contractFor(name, makeStore, { setUp = async () => {}, tearDown = async
       assert.equal(after.practice[0].confidence, 1);
     });
 
+    test('A SCORED ANSWER PERSISTS — the verdicts, declared so a strict schema keeps them', async () => {
+      const user = await store.users.create({ email: 'scored@example.com', passwordHash: 'h' });
+      const kit = await store.kits.create({ userId: user.id, input: INPUT, jdHash: 'scored' });
+
+      const after = await store.kits.write({
+        kitId: kit.id,
+        push: {
+          scores: {
+            questionId: 'q1',
+            verdicts: [
+              { requirementId: 'r1', verdict: 'hit' },
+              { requirementId: 'r2', verdict: 'missed' },
+            ],
+            hitRequirementIds: ['r1'],
+            missedRequirementIds: ['r2'],
+            at: new Date(),
+          },
+        },
+      });
+
+      assert.equal(after.scores.length, 1, 'the score was stored');
+      assert.equal(after.scores[0].questionId, 'q1');
+      assert.deepEqual(after.scores[0].missedRequirementIds, ['r2']);
+      assert.equal(after.scores[0].verdicts[1].verdict, 'missed');
+    });
+
     test('the duplicate lookup honours hash, owner, status and window', async () => {
       const user = await store.users.create({ email: 'dupe@example.com', passwordHash: 'h' });
       const other = await store.users.create({ email: 'other@example.com', passwordHash: 'h' });

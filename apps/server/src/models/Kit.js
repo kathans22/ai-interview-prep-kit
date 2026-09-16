@@ -102,6 +102,33 @@ const practiceSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/**
+ * One scored answer: the verdict per requirement, never the typed answer itself.
+ *
+ * DECLARED, like `practiceSchema`, because Mongoose is strict: a `$push` to an undeclared
+ * path is discarded with no error, and every scored answer would have returned 200 and
+ * saved nothing — the BUG-022 trap. Beside the kit, never inside it, so a regeneration
+ * cannot delete a record of what a person did.
+ */
+const scoreVerdictSchema = new mongoose.Schema(
+  {
+    requirementId: { type: String, required: true },
+    verdict: { type: String, enum: ['hit', 'missed', 'unjudged'], required: true },
+  },
+  { _id: false }
+);
+
+const scoreSchema = new mongoose.Schema(
+  {
+    questionId: { type: String, required: true },
+    verdicts: { type: [scoreVerdictSchema], default: [] },
+    hitRequirementIds: { type: [String], default: [] },
+    missedRequirementIds: { type: [String], default: [] },
+    at: { type: Date, default: () => new Date() },
+  },
+  { _id: false }
+);
+
 const kitSchema = new mongoose.Schema(
   {
     userId: {
@@ -163,6 +190,9 @@ const kitSchema = new mongoose.Schema(
 
     /** Practice ratings, append-only. See `practiceSchema`. */
     practice: { type: [practiceSchema], default: [] },
+
+    /** Scored answers, append-only. See `scoreSchema`. */
+    scores: { type: [scoreSchema], default: [] },
 
     /**
      * The last checkpoint, so an interrupted build can continue instead of restarting.
