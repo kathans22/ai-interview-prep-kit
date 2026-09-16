@@ -197,6 +197,44 @@ export function createFixtureProvider({ onCall = () => {} } = {}) {
         };
       }
 
+      if (step === 'answer-score') {
+        // Two fenced blocks: the scoring criteria, then the candidate's answer. A point
+        // counts as hit when the answer shares a significant word with it — crude, but
+        // deterministic, derived from the input, and enough to exercise hit AND missed
+        // end to end without a model.
+        const blocks = [...String(request.contents ?? '').matchAll(FENCED)].map((match) => match[1]);
+        const criteria = blocks[0] ?? '';
+        const words = (value) => String(value).toLowerCase().match(/[a-z]{5,}/g) ?? [];
+        const answerWords = new Set(words(blocks[1] ?? ''));
+        const covered = (value) => words(value).some((word) => answerWords.has(word));
+
+        const requirements = [...criteria.matchAll(/id: (r\d+)\n\s+requirement: (.+)/g)].map((match) => ({
+          requirement_id: match[1],
+          verdict: covered(match[2]) ? 'hit' : 'missed',
+          reason: covered(match[2]) ? 'The answer uses this requirement\'s own terms.' : 'The answer does not address this requirement.',
+        }));
+
+        const outlineLine = (criteria.split('ANSWER OUTLINE')[1] ?? '').split('\n')[1]?.trim() ?? '';
+        const outlinePoints =
+          outlineLine && outlineLine !== '(none)'
+            ? outlineLine
+                .split(/[,;]| and /)
+                .map((point) => point.replace(/^the\s+/i, '').replace(/\.$/, '').trim())
+                .filter(Boolean)
+                .map((point) => ({ point, verdict: covered(point) ? 'hit' : 'missed' }))
+            : [];
+
+        return {
+          data: {
+            requirements,
+            outline_points: outlinePoints,
+            improvement: 'Add a concrete example for the point marked missed, and say what it led to.',
+          },
+          raw: null,
+          text: '',
+        };
+      }
+
       // An unknown step gets an empty object rather than a throw: a new step should show
       // up as a recorded degradation in the smoke output, not as a crashed run.
       return { data: {}, raw: null, text: '' };

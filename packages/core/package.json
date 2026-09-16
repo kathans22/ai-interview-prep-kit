@@ -11,7 +11,8 @@
     "./retrieval/*": "./retrieval/*",
     "./generation/*": "./generation/*",
     "./orchestrator/*": "./orchestrator/*",
-    "./practice/*": "./practice/*"
+    "./practice/*": "./practice/*",
+    "./scoring/*": "./scoring/*"
   },
   "dependencies": {
     "@google/genai": "^2.21.0"
