@@ -60,15 +60,6 @@ export const RECENCY_PUSH_MAX = 0.75;
 /** How quickly that push fades: it halves every thirty minutes. */
 export const RECENCY_HALF_LIFE_MS = 30 * 60 * 1000;
 
-/**
- * How far a card covering a MISSED requirement is pulled forward. Also under one rating
- * step, for the same reason the recency push is: a "good" card covering a weak area
- * (3 − 0.6 = 2.4) surfaces ahead of the unseen cards, but never ahead of a card the
- * person actually found hard — and an "again" card keeps its lead outright.
- */
-export const WEAK_BOOST = 0.6;
-
-
 const isRating = (value) => Number.isInteger(value) && value >= RATING_VALUES.again && value <= RATING_VALUES.easy;
 
 const timeOf = (value) => {
@@ -120,43 +111,28 @@ export function latestRatings(entries) {
  * The cards in practice order, each with the numbers that put it there.
  *
  * @param {object} input
- * @param {Array<{ id: string, requirement_ids?: string[] }>} input.cards  the kit's flashcards, in the kit's order
+ * @param {Array<{ id: string }>} input.cards  the kit's flashcards, in the kit's order
  * @param {Array<{ cardId?: string, confidence: number, at?: string|Date }>} input.ratings  the practice log
  * @param {number} [input.now]  milliseconds since the epoch
- * @param {string[]} [input.weakRequirements]  requirement ids a scored answer missed. A
- *   card covering one of them is pulled forward by WEAK_BOOST — still never past a whole
- *   rating step, so weak areas resurface without overriding what the person said.
- * @returns {Array<{ id: string, priority: number, seen: boolean, latest: number|null, attempts: number, lastAt: string|null, weak: boolean }>}
+ * @returns {Array<{ id: string, priority: number, seen: boolean, latest: number|null, attempts: number, lastAt: string|null }>}
  */
-export function orderCards({ cards, ratings, now = Date.now(), weakRequirements = [] } = {}) {
+export function orderCards({ cards, ratings, now = Date.now() } = {}) {
   const latest = latestRatings(ratings);
-  const weakSet = new Set(Array.isArray(weakRequirements) ? weakRequirements : []);
 
   return (Array.isArray(cards) ? cards : [])
     .filter((card) => card && card.id)
     .map((card, position) => {
-      const weak = weakSet.size > 0 && (card.requirement_ids ?? []).some((id) => weakSet.has(id));
       const rating = latest.get(card.id);
       if (!rating) {
-        return {
-          id: card.id,
-          priority: UNSEEN_PRIORITY - (weak ? WEAK_BOOST : 0),
-          seen: false,
-          latest: null,
-          attempts: 0,
-          lastAt: null,
-          weak,
-          position,
-        };
+        return { id: card.id, priority: UNSEEN_PRIORITY, seen: false, latest: null, attempts: 0, lastAt: null, position };
       }
       return {
         id: card.id,
-        priority: rating.value + recencyPush(rating.at, now) - (weak ? WEAK_BOOST : 0),
+        priority: rating.value + recencyPush(rating.at, now),
         seen: true,
         latest: rating.value,
         attempts: rating.attempts,
         lastAt: rating.at,
-        weak,
         position,
       };
     })

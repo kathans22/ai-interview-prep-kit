@@ -287,17 +287,6 @@ export const kits = {
       body: { section, category, revision: revisionFor(id) },
     }),
 
-  /**
-   * Score a typed answer against one question — the question's own outline and the text
-   * of the requirements it covers are the only criteria the server scores against. Costs
-   * a model call; the server records the score in the practice log.
-   */
-  scoreAnswer: (id, questionId, answer) =>
-    request(`/api/kits/${encodeURIComponent(id)}/questions/${encodeURIComponent(questionId)}/score`, {
-      method: 'POST',
-      body: { answer },
-    }),
-
   undoRegenerate: (id, section) =>
     request(`/api/kits/${encodeURIComponent(id)}/undo-regenerate`, {
       method: 'POST',

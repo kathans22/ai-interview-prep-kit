@@ -123,8 +123,6 @@ export function usePracticeHistory(id) {
     deck: data?.deck ?? [],
     cards: data?.cards ?? [],
     questions: data?.questions ?? [],
-    /** Requirement ids a scored answer missed — what the server pulled forward in the deck. */
-    weakRequirements: data?.weakRequirements ?? [],
   };
 }
 
@@ -135,17 +133,3 @@ export function useRecordPractice(id) {
 
   return { ...rest, record: run };
 }
-
-/**
- * Score a typed answer against one of the kit's questions. Not immediate — a score costs
- * a model call, so it fires only when the person submits. The server returns what was
- * hit, what was missed and one improvement, and records the score in the practice log,
- * which is what pulls the weak areas forward in the next practice order.
- */
-export function useScoreAnswer(id) {
-  const task = useCallback((signal, { questionId, answer }) => kits.scoreAnswer(id, questionId, answer), [id]);
-  const { run, ...rest } = useAsync(task, { immediate: false, deps: [id] });
-
-  return { ...rest, score: run };
-}
-

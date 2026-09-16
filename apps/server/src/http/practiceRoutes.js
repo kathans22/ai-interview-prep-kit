@@ -40,8 +40,8 @@ import { route, ApiError } from './errors.js';
 import { validatePractice } from './validate.js';
 import { requireAuth, withOwnedKit } from '../auth/requireAuth.js';
 
-/** Keep the log bounded; a kit is not a time-series database. Shared with the score route. */
-export const MAX_RATINGS = 2000;
+/** Keep the log bounded; a kit is not a time-series database. */
+const MAX_RATINGS = 2000;
 
 /**
  * One summary per rated item: attempts, the first rating (the honest baseline), the
@@ -128,25 +128,12 @@ export function mountPracticeRoutes(app) {
     route(async (request, response) => {
       const entries = request.kit.practice ?? [];
 
-      // The requirements a scored answer missed, across the whole log. A card covering one
-      // of them is pulled forward in the deck — the missed outline points resurfacing as
-      // the cards that would have prevented them.
-      const weakRequirements = [
-        ...new Set(entries.flatMap((entry) => (Array.isArray(entry.missedRequirements) ? entry.missedRequirements : []))),
-      ];
-
       response.json({
         total: entries.length,
         entries,
-        // Least confident first (`orderCards`), with weak areas pulled forward. Empty for a
-        // kit that has not finished building, which has no flashcards to order.
-        deck: orderCards({
-          cards: request.kit.kit?.flashcards ?? [],
-          ratings: entries,
-          now: Date.now(),
-          weakRequirements,
-        }),
-        weakRequirements,
+        // Least confident first (`orderCards`). Empty for a kit that has not finished
+        // building, which has no flashcards to order.
+        deck: orderCards({ cards: request.kit.kit?.flashcards ?? [], ratings: entries, now: Date.now() }),
         cards: summariseBy(entries, 'cardId'),
         // Weakest first: the point of recording confidence is to find what to revise,
         // and a list sorted by question id makes that the reader's job.

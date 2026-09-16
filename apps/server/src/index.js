@@ -45,7 +45,6 @@ import { mountProgressRoutes } from './http/progressRoutes.js';
 import { mountEditRoutes } from './http/editRoutes.js';
 import { mountRegenerateRoutes } from './http/regenerateRoutes.js';
 import { mountPracticeRoutes } from './http/practiceRoutes.js';
-import { mountScoreRoutes } from './http/scoreRoutes.js';
 import { createLimiters } from './http/rateLimit.js';
 import { sessionMiddleware } from './auth/session.js';
 import { createMongoStore, connectMongo, disconnectMongo } from './store/mongoStore.js';
@@ -171,9 +170,6 @@ export async function start({ env = process.env, provider: injectedProvider = nu
     // Practice ratings cost nothing and are not limited: refusing to record that
     // someone revised would be limiting the wrong thing.
     mountPracticeRoutes(instance);
-    // Scoring a typed answer spends model calls, so it shares the generation limiter
-    // with creation and regeneration — one score is one call against the day's quota.
-    mountScoreRoutes(instance, { rateLimit: limiters.generation });
   });
 
   // Installs the 404 and the error handler. Anything mounted after this is unreachable.
