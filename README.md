@@ -40,7 +40,7 @@ The same pipeline runs from a batch command that turns a file of cases into a fi
 | Pipeline | `packages/core` — plain ES modules, no framework |
 | Model | Gemini `gemini-3.5-flash-lite`, through `@google/genai` 2.x |
 | Search | Tavily (optional); without a key the search step records an honest empty result |
-| Tests | `node:test` and `node:assert`, no test dependencies — `npm test`, 665 tests |
+| Tests | `node:test` and `node:assert`, no test dependencies — `npm test`, 668 tests |
 
 The repository is an npm workspace with three packages:
 
