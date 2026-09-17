@@ -28,6 +28,8 @@ import { HIRING_PAGE_REASONS } from '../retrieval/findHiringPage.js';
 import { createSourceLedger } from '../retrieval/sourceLedger.js';
 import { createFixtureProvider } from '../llm/offlineProvider.js';
 import { validateKit } from '../contracts/validateKit.js';
+import { verifySchedule } from '../deterministic/verifySchedule.js';
+import { findGaps } from '../deterministic/coverage.js';
 
 let server;
 
@@ -318,4 +320,110 @@ test('edge 4: a search provider that errors is recorded and the kit is still bui
   assert.equal(searchOutcome(result)[0].status, STATUS.DEGRADED);
   assert.ok(result.kit.run_notes.some((note) => note.includes(SEARCH_REASONS.FAILED)));
   assert.ok(result.kit.questions.length > 0);
+});
+
+// ===========================================================================
+// EDGE CASE 3 — two-line stub JD → thin kit that says it is thin, no invented requirements
+// ===========================================================================
+
+const STUB_JD = 'Backend Engineer — Kestrel Payments\nMust know Go and Postgres.';
+
+/**
+ * A model that pads a thin posting — the failure this row exists to catch. It returns the
+ * one requirement the stub supports and three a "typical backend role" would have, each
+ * with a confident quote the posting does not contain. Every other step is the offline
+ * provider, so the kit still assembles.
+ */
+function paddingProvider() {
+  const offline = createFixtureProvider();
+  const calls = [];
+  return {
+    name: 'padding',
+    model: 'padding-offline',
+    calls,
+    callCount: () => calls.length,
+    countTokens: async () => 100,
+    async complete(request) {
+      calls.push({ step: request.step, request });
+      if (request.step !== 'extract-requirements') return offline.complete(request);
+      return {
+        data: {
+          requirements: [
+            { text: 'Go and Postgres', kind: 'technical', priority: 'must', evidence: 'Must know Go and Postgres.' },
+            { text: '5+ years operating Kubernetes in production', kind: 'technical', priority: 'must', evidence: '5+ years operating Kubernetes in production' },
+            { text: 'Experience with AWS', kind: 'technical', priority: 'must', evidence: 'Hands-on experience with AWS services' },
+            { text: 'Strong communication skills', kind: 'behavioural', priority: 'nice', evidence: 'Excellent written and verbal communication' },
+          ],
+        },
+        raw: null,
+        text: '',
+      };
+    },
+  };
+}
+
+/** What every thin kit must be: whole, labelled thin, and built only on what was written. */
+function assertThinKitWithoutInvention(kit) {
+  assert.equal(validateKit(kit).valid, true, JSON.stringify(validateKit(kit).errors));
+
+  // Says it is thin — as a flag for code, and in words for a person.
+  assert.equal(kit.thin_jd, true);
+  assert.ok(
+    kit.run_notes.some((note) => /below the 400-character threshold/.test(note) && /because the posting is short/.test(note)),
+    `the kit should explain that it is thin: ${JSON.stringify(kit.run_notes)}`
+  );
+
+  // Nothing invented: every requirement quotes the stub, and nothing else refers to a
+  // requirement the stub does not support.
+  const normalisedStub = STUB_JD.toLowerCase();
+  assert.ok(kit.role.requirements.length >= 1, 'the stub still yields what it does say');
+  for (const requirement of kit.role.requirements) {
+    assert.ok(
+      normalisedStub.includes(requirement.evidence.toLowerCase().replace(/\.$/, '')),
+      `"${requirement.text}" quotes "${requirement.evidence}", which the posting does not contain`
+    );
+  }
+  const ids = new Set(kit.role.requirements.map((requirement) => requirement.id));
+  for (const question of kit.questions) {
+    for (const id of question.requirement_ids) assert.ok(ids.has(id), `question ${question.id} cites ${id}`);
+  }
+  for (const card of kit.flashcards) {
+    for (const id of card.requirement_ids) assert.ok(ids.has(id), `flashcard ${card.id} cites ${id}`);
+  }
+
+  // Thin, not padded: the days that exist hold real questions, never filler.
+  assert.equal(verifySchedule(kit).ok, true, JSON.stringify(verifySchedule(kit).violations));
+  assert.deepEqual(findGaps(kit.role.requirements, kit.questions).uncovered_requirement_ids, []);
+}
+
+test('edge 3: a two-line stub posting yields a thin kit that says so', async () => {
+  const result = await buildKit({ jd: STUB_JD, company_url: '', days: 7 }, deps(), {});
+
+  assertThinKitWithoutInvention(result.kit);
+  assert.ok(result.kit.role.requirements.length <= 2, 'two lines cannot support a long requirement list');
+  assert.equal(result.kit.schedule.days.length, 7, 'the days asked for, each with real work');
+});
+
+test('edge 3: requirements a model pads a stub posting with are dropped, not kept', async () => {
+  const provider = paddingProvider();
+  const result = await buildKit({ jd: STUB_JD, company_url: '', days: 7 }, deps({ provider }), {});
+  const { kit } = result;
+
+  assertThinKitWithoutInvention(kit);
+  assert.deepEqual(
+    kit.role.requirements.map((requirement) => requirement.text),
+    ['Go and Postgres'],
+    'only the requirement the posting states survives'
+  );
+
+  // The padding is not silently discarded: the kit lists what was left out, and why.
+  assert.deepEqual(
+    kit.dropped_requirements.map((drop) => drop.text).sort(),
+    ['5+ years operating Kubernetes in production', 'Experience with AWS', 'Strong communication skills']
+  );
+  assert.ok(kit.dropped_requirements.every((drop) => drop.reason === 'EVIDENCE_UNSUPPORTED'));
+  assert.ok(kit.run_notes.some((note) => /3 requirement\(s\) were dropped/.test(note)));
+
+  const questionText = kit.questions.map((question) => `${question.prompt} ${question.answer_outline}`).join('\n');
+  assert.doesNotMatch(questionText, /kubernetes|aws|communication skills/i, 'no question is written about them either');
 });
