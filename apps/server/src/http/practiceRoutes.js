@@ -8,6 +8,11 @@
  * this route only serves the answer. Reordering a study SCHEDULE around weak answers is
  * still out of scope.
  *
+ * MISSED POINTS FEED THE ORDER. The kit's scored answers say which requirements the
+ * person most recently missed (`weakRequirementIds`); the cards covering them are pulled
+ * forward, and the weak requirement ids are returned beside the deck so the screen can say
+ * why those cards come first. Only requirements the kit still has can be weak.
+ *
  * THE ORDER IS SERVED, NOT COMPUTED IN THE BROWSER. The web client imports nothing from
  * core, so a client that ordered cards itself would be carrying a second copy of the
  * algorithm — one that could drift from the one the tests defend. The order is computed
@@ -35,6 +40,7 @@
  */
 
 import { orderCards } from '@aipk/core/practice/orderCards.js';
+import { weakRequirementIds } from '@aipk/core/scoring/weakSpots.js';
 
 import { route, ApiError } from './errors.js';
 import { validatePractice } from './validate.js';
@@ -127,13 +133,16 @@ export function mountPracticeRoutes(app) {
     withOwnedKit(),
     route(async (request, response) => {
       const entries = request.kit.practice ?? [];
+      const requirementIds = (request.kit.kit?.role?.requirements ?? []).map((requirement) => requirement.id);
+      const weakRequirements = weakRequirementIds(request.kit.scores ?? [], { requirementIds });
 
       response.json({
         total: entries.length,
         entries,
-        // Least confident first (`orderCards`). Empty for a kit that has not finished
-        // building, which has no flashcards to order.
-        deck: orderCards({ cards: request.kit.kit?.flashcards ?? [], ratings: entries, now: Date.now() }),
+        weakRequirements,
+        // Least confident first, weak spots pulled forward (`orderCards`). Empty for a kit
+        // that has not finished building, which has no flashcards to order.
+        deck: orderCards({ cards: request.kit.kit?.flashcards ?? [], ratings: entries, now: Date.now(), weakRequirements }),
         cards: summariseBy(entries, 'cardId'),
         // Weakest first: the point of recording confidence is to find what to revise,
         // and a list sorted by question id makes that the reader's job.

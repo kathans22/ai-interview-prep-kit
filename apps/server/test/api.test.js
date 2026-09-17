@@ -1310,6 +1310,39 @@ test('the practice read serves the deck least confident first, unseen cards in t
   );
 });
 
+test('a requirement a scored answer missed pulls its cards forward, and a later hit lets them go back', async () => {
+  const alice = client();
+  await alice.signUp('practice-weak@example.com');
+  const kitId = await giveKitTo('practice-weak@example.com');
+  await store.kits.write({ kitId, set: { 'kit.flashcards': [generatedCard('f1', 'r1'), generatedCard('f2', 'r2')] } });
+  const deckOf = async () => (await alice.call(`/api/kits/${kitId}/practice`)).body;
+  const score = (answer) =>
+    alice.call(`/api/kits/${kitId}/questions/q2/score`, { method: 'POST', body: JSON.stringify({ answer }) });
+
+  let practice = await deckOf();
+  assert.deepEqual(practice.deck.map((card) => card.id), ['f1', 'f2']);
+  assert.deepEqual(practice.weakRequirements, []);
+
+  // q2 covers r2; an answer that does not mention it misses it.
+  assert.equal((await score('I would rather work alone and ship things quickly.')).status, 200);
+  practice = await deckOf();
+  assert.deepEqual(practice.weakRequirements, ['r2']);
+  assert.deepEqual(
+    practice.deck.map((card) => [card.id, card.weak]),
+    [
+      ['f2', true],
+      ['f1', false],
+    ],
+    "r2's card comes first"
+  );
+
+  // A later answer that covers r2 clears the weak spot.
+  assert.equal((await score('I mentored two juniors through weekly code review (r2).')).status, 200);
+  practice = await deckOf();
+  assert.deepEqual(practice.weakRequirements, []);
+  assert.deepEqual(practice.deck.map((card) => card.id), ['f1', 'f2']);
+});
+
 // ===========================================================================
 // Scoring a typed answer
 // ===========================================================================
