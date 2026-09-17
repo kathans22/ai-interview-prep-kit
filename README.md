@@ -11,6 +11,10 @@ Edit the kit by hand, regenerate a section without losing your edits, and practi
 
 The same pipeline runs from a batch command that turns a file of cases into a file of kits.
 
+**Live:** <https://ai-interview-prep-kit-web-rust.vercel.app> · API health:
+<https://ai-interview-prep-kit-api-tree.onrender.com/api/health>. The API is on a free tier
+that sleeps: the first request after 15 idle minutes can take up to a minute (§2.4).
+
 **Contents**
 
 1. [Overview and tech stack](#1-overview-and-tech-stack)
@@ -40,7 +44,7 @@ The same pipeline runs from a batch command that turns a file of cases into a fi
 | Pipeline | `packages/core` — plain ES modules, no framework |
 | Model | Gemini `gemini-3.5-flash-lite`, through `@google/genai` 2.x |
 | Search | Tavily (optional); without a key the search step records an honest empty result |
-| Tests | `node:test` and `node:assert`, no test dependencies — `npm test`, 668 tests |
+| Tests | `node:test` and `node:assert`, no test dependencies — `npm test`, 669 tests |
 
 The repository is an npm workspace with three packages:
 
@@ -182,36 +186,60 @@ eval:extraction -- --offline` re-scores the extraction eval from its committed c
 
 ### 2.4 Deployed
 
+| | |
+|---|---|
+| **Web client** | <https://ai-interview-prep-kit-web-rust.vercel.app> — Vercel, static |
+| **API** | <https://ai-interview-prep-kit-api-tree.onrender.com> — Render, free web service |
+| **Database** | MongoDB Atlas, free M0 cluster |
+
 Both halves run on free tiers:
 
 ```
-browser ──https──▶ Netlify  (static web client, and a proxy for /api/*)
-                       │
-                       └──https──▶ Render  (Express API, background kit builds)
-                                      ├──TLS──▶ MongoDB Atlas  (free M0 cluster)
+browser ──https──▶ Vercel  (static web client; vercel.json rewrites /api/* to Render)
+   │                   │
+   │                   └──https──▶ Render  (Express API, background kit builds)
+   └──https (VITE_API_BASE)──────▶   ├──TLS──▶ MongoDB Atlas  (free M0 cluster)
                                       └──https─▶ Gemini API    (unbilled project)
 ```
 
-The committed configuration is `render.yaml` for the API and `netlify.toml` for the web
-client. `test/deploy.test.js` checks `render.yaml` against `.env.example`:
-- every variable in the template is declared
-- production values are the safe ones
-- no secret is committed
+**Why not the API on Vercel too.** A kit build runs for up to two and a half minutes in
+the background of one long-lived process. That process holds a job runner, a limiter
+shared by every build, and a progress event stream. Serverless functions time out and do
+not outlive their request, so the API runs as an always-on Node service on Render, and
+only the static client is on Vercel.
 
-**Why the web client proxies `/api`.** The API is configured for a genuinely cross-origin
-client:
-- CORS allows exactly one origin, with credentials.
+**The committed configuration:**
+- `render.yaml` defines the API service. `test/deploy.test.js` checks it against
+  `.env.example`: every variable in the template is declared, the production values are the
+  safe ones, and no secret is committed.
+- `vercel.json` routes the web client. `/api/*` is rewritten to the Render API, and every
+  other path is served `index.html`, so reloading `/kits/…` or opening a shared link works.
+- `netlify.toml` is kept as an equivalent configuration for Netlify.
+
+**How the browser reaches the API, and the cookie.** The API is configured for a genuinely
+cross-origin client:
+- CORS allows exactly one origin, the web client's, with credentials.
 - In production the session cookie is `HttpOnly; Secure; SameSite=None`.
+- Because `SameSite=None` gives up the cross-site request protection `Lax` provided, the API
+  refuses any state-changing request whose `Origin` names another site, with
+  `403 ORIGIN_NOT_ALLOWED`.
 
-But Safari on iPhone, and any browser that blocks third-party cookies, throws away a
-cross-site cookie. Sign-in would appear to work, and every request after it would fail
-with 401. So the static site proxies `/api/*` to the API. To the browser the API is then
-same-origin, and the cookie is first-party everywhere. Setting `VITE_API_BASE` instead of
-`API_ORIGIN` calls the API directly, which works in browsers that allow cross-site cookies.
+There are two ways for the client to reach the API:
+- **Through the Vercel rewrite (recommended).** Leave `VITE_API_BASE` unset. The client calls
+  `/api/…` on its own origin, and Vercel forwards the request to Render. The cookie is
+  first-party, so sign-in works in every browser, including Safari on iPhone.
+- **Directly.** Set `VITE_API_BASE` on Vercel to the Render address. This works in browsers
+  that allow cross-site cookies. Safari on iPhone, and any browser blocking third-party
+  cookies, throws the session cookie away: sign-in appears to succeed, and the next request
+  is a 401.
 
-`SameSite=None` gives up the cross-site request protection that `Lax` provided. To restore
-it, the API refuses any state-changing request whose `Origin` names another site, with
-`403 ORIGIN_NOT_ALLOWED`.
+> **The live deployment currently calls the API directly** (`VITE_API_BASE` is set). To
+> switch to the rewrite: delete `VITE_API_BASE` in Vercel → Settings → Environment
+> Variables, then redeploy. Also check `TRUST_PROXY_HOPS` on Render. It is `2` in
+> `render.yaml`, which is right when requests arrive through Vercel and then Render's load
+> balancer. Calling the API directly leaves only Render's balancer, so the right value is
+> `1`. Two hops there would let a client write its own address into `X-Forwarded-For` and
+> slip past the per-IP sign-in limit.
 
 **1. MongoDB Atlas.**
 - Create a free M0 cluster.
@@ -229,44 +257,52 @@ it, the API refuses any state-changing request whose `Origin` names another site
 **2. Gemini.** Create a key at <https://aistudio.google.com/apikey>, and keep its Google
 Cloud project **unbilled** (§3).
 
-**3. Netlify (the web client).**
-- Import the repository. `netlify.toml` supplies the build: `npm run build:web` from the
-  root, publishing `apps/web/dist`, on Node 22.
-- Choose the site name.
-- The first build **fails on purpose**. There is no API to point at yet, and a site that
-  cannot reach its API should not be published.
+**3. Vercel (the web client).**
+- Add New → Project → import this repository.
+- **Root Directory:** the repository root. **Framework Preset:** Other.
+- **Build Command:** `npm run build:web`. **Output Directory:** `apps/web/dist`.
+  **Node.js version:** 22.x.
+- No environment variables are needed for the rewrite. `vercel.json` supplies the routing.
+- Note the address Vercel assigns: `https://<project>.vercel.app`.
 
 **4. Render (the API).**
 - New → Blueprint → this repository. It creates one free web service: `npm ci --omit=dev`,
   then `npm start`, with health check `/api/health`.
 - Render asks for the values that are never committed:
-  - `WEB_ORIGIN`: the Netlify address, exactly
+  - `WEB_ORIGIN`: the Vercel address, exactly — `https://`, and no trailing `/`
   - `MONGODB_URI`
   - `GEMINI_API_KEY`
-  - `SEARCH_API_KEY`: optional
+  - `SEARCH_API_KEY`: optional; without it, the search records an empty result
 - `SESSION_SECRET` is generated by Render, and `PORT` is injected.
 - **`ALLOW_PRIVATE_HOSTS` is `false`.** With `NODE_ENV=production`, the server refuses to
   boot if it is `true` (§5).
+- Wait for the log line `listening on … (production)`, and note the service address.
 
 **5. Connect them.**
-- On Netlify, set `API_ORIGIN` to `https://<service>.onrender.com` and redeploy.
-- `https://<site>.netlify.app/api/health` should return `{"ok":true,"env":"production",…}`.
-  That request travelled through the proxy to the API.
+- Set the `/api/*` destination in `vercel.json` to the Render service address, and push.
+  Vercel redeploys on every push to `main`. A rewrite destination cannot read an
+  environment variable, so the address lives in the file; it is not a secret.
+- Check both halves:
+  - `https://<service>.onrender.com/api/health` returns `{"ok":true,"env":"production",…}`
+  - `https://<project>.vercel.app/api/health` returns the same, through the rewrite
+- If the page says it could not reach the server, the usual cause is `WEB_ORIGIN` on
+  Render not matching the Vercel address exactly (with `VITE_API_BASE` set), or the API
+  still waking up.
 
 **Cold starts on the free tier.** The API sleeps after 15 minutes without traffic, and the
 next request waits while Render starts it again: typically 30 to 60 seconds. On a phone
-this looks like a sign-in button that does nothing for a while. It is not broken:
-- If the first page load or sign-in fails with a gateway error, the proxy gave up before
-  the API woke. Wait a minute and try again; the second attempt is fast.
-- To avoid it before a demo, open `/api/health` a minute beforehand.
+this looks like a sign-in screen that does nothing for a while. It is not broken:
+- If the first page load or sign-in fails, wait a minute and try again; the second attempt
+  is fast.
+- To avoid it before a demo, open the API health address a minute beforehand.
 - Once awake, the service stays awake while it is used. Watching a build counts.
 - A build running when the service restarts is marked **interrupted** at the next boot,
   and can be continued from its page.
 
 **Free-tier limits worth knowing:**
 - Render: 750 instance hours a month.
-- Netlify: 300 build minutes a month. Proxied requests are time-limited; the progress
-  screen survives that by falling back from its event stream to polling.
+- Vercel: requests rewritten to another host are time-limited. The progress screen survives
+  a cut-off event stream by falling back to polling every 2 seconds.
 - Atlas M0: 512 MB of storage.
 - Gemini: see §3.
 
@@ -1242,7 +1278,7 @@ mirror to the original.
 | **The stored kit is schemaless (`Mixed`)**, validated by `validateKit` before every write | One definition of the contract | MongoDB will not catch a malformed kit on its own. Only the validator does, so every write path must go through it, and does. |
 | **Regex HTML cleaning**, not a parser | No dependency, and a narrow task: strip scripts and styles, keep text and links | Malformed markup can yield slightly worse text. It degrades; it never crashes. |
 | **One call per category, requirements batched inside** (§7) | Four question calls however long the posting | Past five requirements per category, the rest wait for the coverage pass, which chases only must-haves; a nice-to-have beyond the fifth can end up uncovered, and is listed |
-| **The `/api` proxy** in deployment (§2.4) | Login works on every browser, including Safari on iPhone | Proxied requests have a time limit, so a cold start can show one gateway error; the progress stream falls back to polling |
+| **Static client on Vercel, API on Render**, joined by a `/api` rewrite (§2.4) | Free hosting for both; the long-running build process lives where it can; with the rewrite, login works on every browser, including Safari on iPhone | Rewritten requests have a time limit, so a cold start can show one failed request and the progress stream falls back to polling; the Render address is written into `vercel.json`. The live deployment still calls the API directly, and needs one setting changed to use the rewrite. |
 | **Answer scoring stores verdicts, not answers** | Nothing a person typed is kept | No answer history to review later |
 
 ### Known limitations
