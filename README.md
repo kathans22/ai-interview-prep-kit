@@ -25,7 +25,9 @@ The same pipeline runs from a batch command that turns a file of cases into a fi
 10. [Schedule allocation](#10-schedule-allocation)
 11. [The extraction eval](#11-the-extraction-eval)
 12. [Budgets and degradation](#12-budgets-and-degradation)
+13. [The creative feature: answer it, and get scored](#13-the-creative-feature-answer-it-and-get-scored)
 14. [Edge cases](#14-edge-cases)
+15. [Design decisions, trade-offs and known limitations](#15-design-decisions-trade-offs-and-known-limitations)
 
 ---
 
@@ -38,7 +40,7 @@ The same pipeline runs from a batch command that turns a file of cases into a fi
 | Pipeline | `packages/core` — plain ES modules, no framework |
 | Model | Gemini `gemini-3.5-flash-lite`, through `@google/genai` 2.x |
 | Search | Tavily (optional); without a key the search step records an honest empty result |
-| Tests | `node:test` and `node:assert`, no test dependencies — `npm test`, 664 tests |
+| Tests | `node:test` and `node:assert`, no test dependencies — `npm test`, 665 tests |
 
 The repository is an npm workspace with three packages:
 
@@ -647,8 +649,9 @@ calls**, whatever the length of the posting.
 - **Invent coverage.** Each returned question must cite a requirement that was in its own
   batch, or it is discarded.
 - **Silently lose requirements.** Past five, extra requirements are returned as *deferred*,
-  not dropped. They are simply uncovered, and the coverage pass (§8) asks about them
-  through the canonical unit.
+  not dropped, and the kit notes how many. They are simply uncovered. The coverage pass
+  (§8) asks about the must-haves among them through the canonical unit. A deferred
+  nice-to-have stays uncovered and is listed as such.
 
 ---
 
@@ -967,6 +970,71 @@ The deadline is **soft**:
 
 ---
 
+## 13. The creative feature: answer it, and get scored
+
+**The problem.** A kit hands a candidate twenty questions, each with an answer outline, and
+a flashcard deck. But the weak point of self-study is **self-assessment**. A candidate
+reads a question, feels they could answer it, rates the card "good", and moves on.
+Practice then trusts that rating. The gap is found in the interview.
+
+**The feature.** Under every question in the bank, the candidate can **type their own
+answer** and have it scored:
+- **what it hit**
+- **what it missed**
+- **one concrete improvement**
+
+A missed requirement then **changes what practice shows first**. The loop runs: question
+bank → requirement ids → practice.
+
+**What the model is given is chosen by code.** It sees only:
+- the question's **answer outline**
+- the text of **the requirements that question covers**, by id
+
+It never sees the rest of the kit, and another requirement's text cannot leak in. The
+criteria and the typed answer are two separate fenced data blocks, because a typed answer
+is untrusted text too.
+
+**Verdicts are held to that scope.** The model returns `hit` or `missed` per requirement
+and per outline point, and code enforces the rest:
+- A verdict for an id outside the question's scope, a duplicate, or a value that is not a
+  verdict is dropped.
+- A covered requirement the model did not judge becomes **`unjudged`**, never a guessed
+  hit or miss.
+- `unjudged` is **not evidence**. It neither makes a requirement weak nor clears one.
+- Exactly one improvement is required.
+
+**Missed points feed practice ordering by id, not by score.**
+- A requirement is **weak** when its most recent hit-or-missed verdict, across every
+  question covering it, was a miss. A later hit clears it.
+- A flashcard covering a weak requirement is pulled forward by **0.6**. That is less than
+  one rating step, so it moves ahead of cards with the same rating, but never ahead of a
+  card the person rated a step worse. For example, a weak card rated "good" comes before
+  unseen cards but after every "hard" one. What the person said about a card still
+  decides; a miss nudges.
+- The practice screen names the weak requirement. A verdict with a miss says which cards
+  will come first next time, or says plainly when no flashcard covers the miss, because
+  practice cannot bring that back.
+
+**Why this feature.** It reuses the one thing that makes this kit checkable: requirement
+ids. Coverage is id set arithmetic (§6), practice ordering takes ids, and scoring produces
+ids. It adds no new concept, only a new source of evidence about which ids a person is weak
+on, and that evidence is better than their own guess.
+
+**Bounded like everything else:**
+- **Refused before any call, spending nothing:** an answer under 20 or over 4,000
+  characters, a question that no longer exists, or nothing to score against. A long
+  answer is refused, not silently cut.
+- **Spending:** one call and at most one repair, from a per-request budget of 2. Scoring
+  shares the limiter, the retry layer, and the per-user generation rate limit that
+  creating a kit uses.
+- **Stored:** only the verdict per requirement, and only when scoring succeeded. **The
+  typed answer itself is never stored.**
+- **Separated:** the feature lives in `packages/core/scoring/`, imported only by its
+  route. Nothing on the kit-build path imports it, so it cannot destabilise the paths that
+  produce a kit.
+
+---
+
 ## 14. Edge cases
 
 Every row is an **automated test that runs in `npm test` with no network**. The tests
@@ -1030,3 +1098,163 @@ any answer that carries an injection command, a `SYSTEM:` line, our fence marker
 run of our own instruction. Both halves were shown able to fail: with marker-defusing
 switched off, the boundary test fails; without the brief guard, the compromised-model test
 fails.
+
+---
+
+## 15. Design decisions, trade-offs and known limitations
+
+### Decisions we would defend
+
+**1. The model writes; the code decides.** Coverage, schedule allocation, category routing,
+evidence checking, flashcard eligibility, merge rules and source provenance are all code.
+None of them is a matter of taste.
+- A model asked "is this requirement covered?" is slower, costs a request from a small
+  daily allowance, can disagree with itself on a second run, and cannot be tested.
+- A model asked "what is missing?" always finds something, so a loop built on it does not
+  terminate.
+
+The model is used where only a model can work: reading a posting, writing a question,
+judging whether a typed answer hit a point. This is the sentence the whole design follows
+from.
+
+**2. Degrade, never abort.** Exactly one failure is fatal: no requirements. Every other
+failure gives a kit that says what it could not do. For a candidate, a kit that reads *"the
+company website could not be read, prepare from the posting"* is worth far more than an
+error page. For a batch run, one dead company site must not cost the other four cases.
+
+**3. Requirements must quote the posting, and a dropped requirement is shown, not hidden.**
+The evidence rule is what keeps the model from padding a thin posting with a "typical" job.
+The threshold (content-word overlap ≥ 0.6) is **not a tuning knob**. If drops rise, the
+prompt is at fault, and lowering the threshold would hide that fault by accepting
+inventions. Dropped requirements appear in the kit because a real requirement wrongly
+dropped is something the candidate should still check.
+
+**4. One implementation, everything injected.** `buildKit` is the only function that builds
+a kit. The API and the batch command are adapters over it, and every collaborator is
+passed in. That is what lets the batch command honestly be "the same code the app runs",
+and it is also what made the edge-case and injection tests possible without a network.
+
+**5. The hiring page is found, not guessed, and "none" is an answer.** No path list, a
+best-first crawl ranked by evidence, and a model that may only confirm a candidate the
+crawler already fetched (§5). A guessed `/careers` misses exactly the companies that
+publish something worth reading. A hiring page invented to avoid saying "none" is worse
+than none.
+
+**6. The deadline is soft, and the search is never the thing that gets dropped.** A call
+killed mid-flight has spent its tokens and returns nothing. Under pressure, only
+flashcards and the third coverage pass may go. The public discussion search narrows but
+always runs, because *searched and found nothing* is a different fact from *never looked*.
+
+**7. Practice ordering is a confidence-weighted sort with a light recency decay, not
+spaced repetition.**
+- **Lowest ratings first.** Priority is the latest rating: again 1, hard 2, good 3, easy 4.
+- **Very recent cards are pushed back slightly**, by at most 0.75, halving every 30
+  minutes. That is less than one rating step, so a card failed a minute ago still comes
+  before any card found hard.
+- **Unseen cards are seeded in the middle**, at 2.5, between hard and good.
+
+It is simpler than SM-2, with no interval bookkeeping, and it behaves sensibly for someone
+practising over **three days rather than three months**. A kit is for an interview next
+week, and an algorithm tuned for long-term retention schedules the most important cards
+for after the interview has happened.
+
+**8. Progress uses a stream *and* polling, and the stream is never trusted to report its
+own death.** This was measured, not assumed: with the backend killed mid-build, the
+browser's `EventSource` sat in `OPEN` for 39 seconds and never fired `error`. So after 12
+seconds of silence a watchdog **asks** the polling endpoint:
+- it answers and the build is finished: done
+- it answers and the build is still running: the stream is broken, so reconnect it
+- it does not answer: say so, and keep polling
+
+Silence alone proves nothing, because the server's heartbeat is an SSE comment, and
+comments fire no browser event.
+
+**9. The kit's revision lives in one place.** Every write reads it from one ledger, and the
+ledger is newest-wins. A component holding its own copy is how a reply that arrives late
+sends the next edit with an old revision, and then that edit "conflicts" with the person's
+own earlier save.
+
+**10. The client mirrors the server's rules only to explain itself.** Input limits, what a
+regeneration would replace, and the scorer's length bounds are mirrored in the client, so
+a disabled button can say why. The server remains the authority, and a test holds each
+mirror to the original.
+
+**11. Small things done properly:**
+- **CSV upload.** The batch upload uses a real character-scanning CSV parser, never
+  `split(',')`. A job description has commas in every sentence, and a spreadsheet export
+  has quoted line breaks and a byte-order mark.
+- **Accessibility.** Focus rings and reduced motion are **global rules** in `index.css`,
+  so a new button inherits them without its author knowing the file exists.
+- **Errors.** The client has five codes of its own for failures that arrive with no coded
+  body: network down, cancelled, unexpected response, unknown revision, and server
+  unreachable. Every screen has one error path, and a cancelled request is never shown as a
+  failure.
+- **Pins.** React is deliberately pinned to 18.3; React Router 7's peer range is
+  `react >= 18`, so the pin holds. Tailwind 4 is CSS-first, with no `tailwind.config.js`
+  or PostCSS config, on purpose.
+
+### Trade-offs accepted
+
+| Choice | What it buys | What it costs |
+|---|---|---|
+| **Stateless signed session cookie** (HMAC, expiry inside the signature, constant-time compare) | No session table and no session store to scale, and every route is testable without a database | A session **cannot be revoked** server-side. Logging out clears that browser only; a copied cookie stays valid until it expires, which is why the lifetime is 7 days, not a year. |
+| **In-process job runner**, no queue broker | A build outlives its request, progress is persisted as it happens, and the whole thing is testable in one process | **One instance.** A restart loses in-flight builds (they are reclaimed as interrupted and can resume), and a second server would have its own queue and its own rate-limit counters. |
+| **The stored kit is schemaless (`Mixed`)**, validated by `validateKit` before every write | One definition of the contract | MongoDB will not catch a malformed kit on its own. Only the validator does, so every write path must go through it, and does. |
+| **Regex HTML cleaning**, not a parser | No dependency, and a narrow task: strip scripts and styles, keep text and links | Malformed markup can yield slightly worse text. It degrades; it never crashes. |
+| **One call per category, requirements batched inside** (§7) | Four question calls however long the posting | Past five requirements per category, the rest wait for the coverage pass, which chases only must-haves; a nice-to-have beyond the fifth can end up uncovered, and is listed |
+| **The `/api` proxy** in deployment (§2.4) | Login works on every browser, including Safari on iPhone | Proxied requests have a time limit, so a cold start can show one gateway error; the progress stream falls back to polling |
+| **Answer scoring stores verdicts, not answers** | Nothing a person typed is kept | No answer history to review later |
+
+### Known limitations
+
+**Retrieval**
+- **No JavaScript rendering.** The crawler reads the HTML a server returns. A company site
+  that renders everything client-side reads as nearly empty, and the brief says it could
+  not describe the company.
+- **Public discussion is only as good as one search.** Without a Tavily key the step records
+  an empty result. With one, snippets are used only as unverified corroboration, never as
+  facts.
+
+**Generation and evaluation**
+- **The extraction eval is a regression guard, not a benchmark.** It has five fixtures,
+  labelled by the people who wrote the prompt, and the prompt was tuned while watching
+  those numbers. 100% here means the known failure modes are handled, not that extraction
+  is perfect on postings nobody has seen.
+- **The evidence check verifies the quote, not the wording of the requirement.** A model
+  that quotes a real line of the posting but writes a different requirement against it
+  passes. The eval found no such case, but the guard cannot rule it out.
+- **Injection defence in code covers the company brief, not the questions.** The fence is
+  proven to hold, and requirements, priorities, the schedule and the brief survive a model
+  that obeys the attack (§14). A hostile *hiring page* is fenced when its process is
+  extracted, and those stages shape the question prompts. A model that obeyed fenced text
+  there could still colour a question's wording. That relies on the model respecting the
+  fence.
+- **The brief guard fails closed.** A company whose own pages contain text like "ignore
+  previous instructions" gets its brief withheld, and the kit says so.
+- **The answer scorer has only run on the offline and test providers.** Its prompt, schema,
+  fencing and verdict filtering are tested. How well Gemini judges a real typed answer has
+  not been measured.
+- **`--fake` output is structurally valid and deliberately bland.** Nothing about question
+  quality can be concluded from an offline run; that is what the eval and a live run are
+  for.
+
+**State and concurrency**
+- **Idempotency is check-then-create.** Two identical submissions arriving at the same
+  instant can both start a build. A resubmission during or after a build, and a
+  double-click after the response, are handled.
+- **A regenerated flashcard keeps the old card's practice ratings**, because a replacement
+  reuses the id it replaces (§9). A fix needs the merge to record a content change
+  separately from `updatedAt`, since a pin also moves `updatedAt`.
+- **Undoing a questions regeneration restores every category**, because one snapshot of the
+  question list is kept per section. The client warns and names exactly what would be lost.
+- **Rate limits are per process, and sign-in limiting is per IP.** People behind one NAT
+  share a sign-in bucket, and a scaled deployment would need shared counters.
+- **The batch command cannot resume a case.** The API resumes interrupted builds from
+  checkpoints; the command runs each case from the start.
+
+**Deployment**
+- **Free tiers sleep.** The first request after 15 idle minutes waits 30–60 seconds (§2.4).
+- **Atlas network access is `0.0.0.0/0`**, because Render's free tier has no fixed outbound
+  addresses. Access rests on a least-privilege user, its password and TLS.
+- **The MongoDB half of the store contract** runs only when `MONGODB_URI` is set. The
+  in-memory half runs in every `npm test`.
