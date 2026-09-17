@@ -92,7 +92,7 @@ export default function KitBuilder({ kitId, kit: serverKit }) {
     <div className="space-y-6">
       <BriefSection kit={kit} editor={editor} {...regenerate} />
       <RoleSection kit={kit} />
-      <QuestionsSection kit={kit} editor={editor} {...regenerate} />
+      <QuestionsSection kitId={kitId} kit={kit} editor={editor} {...regenerate} />
       <FlashcardsSection kit={kit} editor={editor} />
       <ScheduleSection kit={kit} {...regenerate} />
       <CoverageSection kit={kit} />

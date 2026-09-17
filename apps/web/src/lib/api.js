@@ -293,6 +293,18 @@ export const kits = {
       body: { section, revision: revisionFor(id) },
     }),
 
+  /**
+   * Score an answer the person typed to one question. Spends model quota, takes no
+   * revision — a verdict is not an edit — and returns the kit's new revision, which the
+   * ledger records like any other.
+   */
+  scoreAnswer: (id, questionId, answer, signal) =>
+    request(`/api/kits/${encodeURIComponent(id)}/questions/${encodeURIComponent(questionId)}/score`, {
+      method: 'POST',
+      body: { answer },
+      signal,
+    }),
+
   /** Progress without a stream, for the client whose proxy eats SSE. */
   progressSince: (id, since = 0, signal) =>
     request(`/api/kits/${encodeURIComponent(id)}/progress/poll?since=${encodeURIComponent(since)}`, { signal }),

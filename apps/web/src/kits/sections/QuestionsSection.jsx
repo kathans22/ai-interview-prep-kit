@@ -60,6 +60,7 @@ import Card from '../../ui/Card.jsx';
 import ConfirmDialog from '../../ui/ConfirmDialog.jsx';
 import SectionState from '../../ui/SectionState.jsx';
 import Spinner from '../../ui/Spinner.jsx';
+import AnswerPractice from '../../scoring/AnswerPractice.jsx';
 import AddQuestionForm from '../AddQuestionForm.jsx';
 import CategoryMenu from '../CategoryMenu.jsx';
 import DeletedPlaceholder from '../DeletedPlaceholder.jsx';
@@ -100,7 +101,7 @@ function GripIcon() {
   );
 }
 
-export default function QuestionsSection({ kit, editor, regeneration, onRegenerate, onUndo }) {
+export default function QuestionsSection({ kitId, kit, editor, regeneration, onRegenerate, onUndo }) {
   const questions = kit?.questions;
   const present = Array.isArray(questions);
   const groups = groupQuestions(questions);
@@ -355,6 +356,8 @@ export default function QuestionsSection({ kit, editor, regeneration, onRegenera
                             </p>
                           </EditableText>
                         </details>
+
+                        <AnswerPractice kitId={kitId} question={question} onBeforeScore={editor.settle} />
 
                         <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2">
                           {['up', 'down'].map((direction) => {

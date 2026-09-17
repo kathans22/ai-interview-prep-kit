@@ -99,6 +99,18 @@ export function useResumeKit() {
   return { ...rest, resume: run };
 }
 
+/**
+ * Score a typed answer to one of this kit's questions. Not immediate: it spends model
+ * quota, so it runs only when a person asks. One hook per answer panel, so each question
+ * keeps its own result.
+ */
+export function useScoreAnswer(kitId) {
+  const task = useCallback((signal, questionId, answer) => kits.scoreAnswer(kitId, questionId, answer, signal), [kitId]);
+  const { run, ...rest } = useAsync(task, { immediate: false, deps: [kitId] });
+
+  return { ...rest, score: run };
+}
+
 /** Delete a kit. Not immediate — a destructive action waits to be asked for. */
 export function useDeleteKit() {
   const task = useCallback((signal, id) => kits.remove(id), []);
