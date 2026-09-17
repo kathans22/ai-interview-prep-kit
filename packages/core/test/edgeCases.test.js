@@ -302,6 +302,25 @@ test('edge 4: a search that finds nothing is recorded as attempted and empty, no
   assert.ok(result.kit.run_notes.includes('Public discussion search ran and found nothing (NO_PUBLIC_DISCUSSION_FOUND).'));
 });
 
+test('edge 4: a search that could not run says so, and never claims it ran', async () => {
+  // No search provider configured at all: nothing was attempted.
+  const result = await buildKit(
+    { jd: JD, company_url: '', days: 5 },
+    deps({ searchProvider: null }),
+    {}
+  );
+
+  assert.equal(validateKit(result.kit).valid, true);
+  assert.equal(result.state.search.attempted, false);
+  assert.equal(result.state.search.reason, SEARCH_REASONS.NOT_ATTEMPTED);
+  assert.ok(result.kit.run_notes.includes('Public discussion search could not run (SEARCH_NOT_ATTEMPTED).'));
+  assert.equal(
+    result.kit.run_notes.some((note) => /search ran/.test(note)),
+    false,
+    `"ran" would contradict "not attempted": ${JSON.stringify(result.kit.run_notes)}`
+  );
+});
+
 test('edge 4: a search provider that errors is recorded and the kit is still built', async () => {
   const ledger = createSourceLedger();
   const searchProvider = {

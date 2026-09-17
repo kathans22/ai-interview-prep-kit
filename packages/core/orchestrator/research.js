@@ -194,7 +194,11 @@ export async function researchCompany({ companyUrl, deps, reporter, budget, stat
       search.results.length > 0 ? STATUS.DONE : STATUS.DEGRADED,
       { attempted: search.attempted, reason: search.reason, results: search.results.length, narrowed: degraded }
     );
-    if (search.results.length === 0) {
+    if (!search.attempted) {
+      // No provider, or no company name to search for. Saying it "ran" would be the
+      // exact confusion between not-attempted and attempted-and-empty the ledger avoids.
+      state.notes.push(`Public discussion search could not run (${search.reason}).`);
+    } else if (search.results.length === 0) {
       state.notes.push(`Public discussion search ran and found nothing (${search.reason}).`);
     }
   }
