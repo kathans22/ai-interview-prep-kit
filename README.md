@@ -391,6 +391,14 @@ tested against an in-memory store that passes the same contract test as the Mong
 
   It warns, and still starts, about a daily limit too small for a batch run or a blank
   search key.
+- **Access control gives nothing away:**
+  - **Another user's kit is `404`, never `403`.** A missing kit and someone else's look
+    identical, so a kit id cannot be used to learn whether a kit exists.
+  - **Sign-in failures look the same.** A wrong password and an unknown email get the same
+    message, and an unknown email still runs bcrypt against a dummy hash, so response time
+    reveals nothing either.
+  - **A `500` never echoes its underlying message.** The cause goes to the server log.
+    Every other error returns a code and a message a person can act on.
 - **The client** holds no business rules. Where it must predict the server (input limits,
   which items a regeneration would replace), it mirrors core in one module, and a test
   holds the mirror to the original.
@@ -767,6 +775,9 @@ pending operations applied on top.
   confirms it.
 - **A delete** is held back for six seconds before it is sent. That hold is the undo
   window: undoing something not yet sent needs no second request.
+- **Reordering** uses pointer events for dragging. Every drag has a keyboard equivalent
+  that moves an item one place within its category, and both send **identical
+  operations**, so there is one code path to get right, not two.
 - **Regeneration and undo** wait for pending edits to land first, and run exclusively.
 - **On a 409**, the editor rebases onto the kit that the conflict carried, re-applies the
   waiting operations, and resends. Up to three rebases in a row are tried; the conflict is
@@ -1183,12 +1194,14 @@ mirror to the original.
 - **CSV upload.** The batch upload uses a real character-scanning CSV parser, never
   `split(',')`. A job description has commas in every sentence, and a spreadsheet export
   has quoted line breaks and a byte-order mark.
-- **Accessibility.** Focus rings and reduced motion are **global rules** in `index.css`,
-  so a new button inherits them without its author knowing the file exists.
+- **Accessibility.** The baseline is enforced **globally**, not per component: a skip link,
+  `:focus-visible` rings, and a `prefers-reduced-motion` sweep in `index.css`. A new
+  button inherits all of it without its author knowing the file exists, and a reviewer
+  reading a single component will not see it.
 - **Errors.** The client has five codes of its own for failures that arrive with no coded
-  body: network down, cancelled, unexpected response, unknown revision, and server
-  unreachable. Every screen has one error path, and a cancelled request is never shown as a
-  failure.
+  body: `NETWORK_UNAVAILABLE`, `UNEXPECTED_RESPONSE` (usually a proxy's HTML page),
+  `REQUEST_CANCELLED`, `REVISION_UNKNOWN`, and `SERVER_UNREACHABLE`. Every screen has one
+  error path, and a cancelled request is never shown as a failure.
 - **Pins.** React is deliberately pinned to 18.3; React Router 7's peer range is
   `react >= 18`, so the pin holds. Tailwind 4 is CSS-first, with no `tailwind.config.js`
   or PostCSS config, on purpose.
