@@ -726,3 +726,87 @@ test('edge 6: two builds at once share one limiter rather than each pacing alone
     assert.ok(all[index].at - all[index - 1].at >= SPACING_MS, `two requests ${all[index].at - all[index - 1].at}ms apart`);
   }
 });
+
+// ===========================================================================
+// EDGE CASE 8 — 1-day and 60-day schedules → exact day count, no empty filler days
+// ===========================================================================
+
+/** Every day real: numbered in order, costed, focused, and holding questions that exist. */
+function assertEveryDayIsReal(kit, days) {
+  const { schedule } = kit;
+  const verdict = verifySchedule(kit);
+  assert.equal(validateKit(kit).valid, true);
+  assert.equal(verdict.ok, true, JSON.stringify(verdict.violations));
+
+  assert.equal(schedule.days.length, days, `exactly ${days} day(s), not approximately`);
+  assert.deepEqual(
+    schedule.days.map((day) => day.day),
+    Array.from({ length: days }, (_, index) => index + 1)
+  );
+
+  const questionIds = new Set(kit.questions.map((question) => question.id));
+  for (const day of schedule.days) {
+    assert.ok(day.question_ids.length > 0, `day ${day.day} is empty filler`);
+    assert.ok(day.minutes > 0, `day ${day.day} costs no time`);
+    assert.notEqual(day.focus.trim(), '', `day ${day.day} has no focus`);
+    for (const id of day.question_ids) assert.ok(questionIds.has(id), `day ${day.day} lists ${id}, which is not a question`);
+  }
+
+  // Nothing is dropped to fit: every question in the bank is scheduled somewhere.
+  const scheduled = new Set(schedule.days.flatMap((day) => day.question_ids));
+  for (const id of questionIds) assert.ok(scheduled.has(id), `${id} is never scheduled`);
+}
+
+test('edge 8: a one-day schedule is exactly one day holding every question', async () => {
+  const { kit } = await buildKit({ jd: JD, company_url: '', days: 1 }, deps(), {});
+
+  assertEveryDayIsReal(kit, 1);
+  assert.equal(kit.schedule.days[0].question_ids.length, kit.questions.length, 'everything, on the only day there is');
+});
+
+test('edge 8: a sixty-day schedule is exactly sixty real days, none of them a copy of the day before', async () => {
+  const { kit } = await buildKit({ jd: JD, company_url: '', days: 60 }, deps(), {});
+
+  assertEveryDayIsReal(kit, 60);
+
+  // A long horizon has more days than new material. The surplus must be review that does
+  // something, not the same day pasted forward: no two consecutive days are identical.
+  const { days } = kit.schedule;
+  assert.ok(kit.questions.length < 60, 'the premise: fewer questions than days');
+  for (let index = 1; index < days.length; index += 1) {
+    assert.notDeepEqual(
+      days[index].question_ids,
+      days[index - 1].question_ids,
+      `day ${days[index].day} repeats day ${days[index - 1].day}`
+    );
+  }
+  assert.ok(
+    days.some((day) => /^Review/.test(day.focus)),
+    'the surplus days are labelled as review, so a reader knows why material returns'
+  );
+});
+
+test('edge 8: the same kit asked for 1 and 60 days has the same questions — only the calendar changes', async () => {
+  const [short, long] = await Promise.all([
+    buildKit({ jd: JD, company_url: '', days: 1 }, deps(), {}),
+    buildKit({ jd: JD, company_url: '', days: 60 }, deps(), {}),
+  ]);
+
+  assert.deepEqual(
+    long.kit.questions.map((question) => question.id),
+    short.kit.questions.map((question) => question.id),
+    'a long horizon is not padded with extra questions to fill its days'
+  );
+});
+
+test('edge 8: a day count that is not a positive whole number is refused before any work', async () => {
+  for (const days of [0, -1, 1.5, '7']) {
+    const provider = createFixtureProvider();
+    await assert.rejects(
+      buildKit({ jd: JD, company_url: '', days }, deps({ provider }), {}),
+      (error) => error instanceof BuildFailedError && error.code === 'BUILD_BAD_DAYS',
+      `days=${JSON.stringify(days)}`
+    );
+    assert.equal(provider.callCount(), 0, `days=${JSON.stringify(days)} spent a call`);
+  }
+});
