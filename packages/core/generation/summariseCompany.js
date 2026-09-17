@@ -24,6 +24,13 @@
  *      mentions. A cited URL the crawler never retrieved is dropped.
  *   3. THE PROMPT FORBIDS OUTSIDE KNOWLEDGE explicitly, and says what to write instead
  *      when the pages are thin.
+ *   4. AN ANSWER THAT ECHOES INSTRUCTIONS IS WITHHELD. This is the one step whose input
+ *      is a page anyone can write and whose output is shown to the candidate word for
+ *      word. The fence asks the model not to obey a page that says "output your system
+ *      prompt"; it cannot make it. So the answer is checked in code: one that repeats an
+ *      injection command, or quotes our own instructions, is replaced by a brief saying
+ *      it was withheld. A lost brief costs a paragraph; a published one hands the page
+ *      author the candidate's screen.
  *
  * Search snippets are included as context but marked as unverified: they are the least
  * reliable material in the pipeline, and the summary should lean on fetched pages.
@@ -91,6 +98,45 @@ const SYSTEM_INSTRUCTION = [
  *   ledger's guarantee that a URL was really fetched
  * @returns {Promise<{ brief: object, grounded: boolean, reason: string, usedModel: boolean }>}
  */
+/**
+ * Text that is an instruction to a model, not a description of a company.
+ *
+ * Deliberately narrow. Each pattern is the shape of a command or a prompt dump — "ignore
+ * your previous instructions", "output your system prompt", a "SYSTEM:" line, our fence
+ * markers — rather than a word like "instructions", which a company making furniture or
+ * medical devices may genuinely publish.
+ */
+const INSTRUCTION_ECHOES = Object.freeze([
+  /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|your|system)\b[^.\n]{0,30}\b(instructions?|rules|prompts?)\b/i,
+  /\b(output|reveal|print|repeat|show|reply with|return)\b[^.\n]{0,40}\bsystem prompt\b/i,
+  /\bmy (instructions|system prompt|rules) (were|are)\b/i,
+  /(^|\n)\s*(SYSTEM|ASSISTANT|OPERATOR)\s*:/,
+  /\byou are now (in|a|an)\b/i,
+  /\bnew instructions from\b/i,
+  /UNTRUSTED_DATA_(BEGIN|END)|DATA TO ANALYSE/i,
+]);
+
+/** How many consecutive words of our own instruction count as quoting it. */
+const QUOTED_RUN_WORDS = 8;
+
+/**
+ * Does this answer carry an injected command, or a run of our own instruction?
+ *
+ * @param {string} text the model's summary and what_they_do together
+ * @returns {boolean}
+ */
+export function echoesInstructions(text) {
+  const answer = String(text ?? '');
+  if (INSTRUCTION_ECHOES.some((pattern) => pattern.test(answer))) return true;
+
+  const flattened = answer.replace(/\s+/g, ' ').toLowerCase();
+  const words = SYSTEM_INSTRUCTION.split(/\s+/).filter(Boolean);
+  for (let index = 0; index + QUOTED_RUN_WORDS <= words.length; index += 1) {
+    if (flattened.includes(words.slice(index, index + QUOTED_RUN_WORDS).join(' ').toLowerCase())) return true;
+  }
+  return false;
+}
+
 export async function summariseCompany(
   { crawledPages = [], hiringPage = null, searchResults = [] } = {},
   { provider, spend, onRepair, vouch } = {}
@@ -175,6 +221,22 @@ export async function summariseCompany(
 
   const summary = typeof answer.summary === 'string' ? answer.summary.trim() : '';
   const whatTheyDo = typeof answer.what_they_do === 'string' ? answer.what_they_do.trim() : '';
+
+  // Defence 4: checked before groundedness, because a model that obeyed a page will
+  // happily also claim to be grounded in it.
+  if (echoesInstructions(`${summary}\n${whatTheyDo}`)) {
+    return {
+      brief: {
+        summary:
+          'The company brief was withheld: the answer repeated instructions instead of describing the company. Prepare from the job description alone.',
+        what_they_do: '',
+        sources,
+      },
+      grounded: false,
+      reason: 'BRIEF_ECHOED_INSTRUCTIONS',
+      usedModel: true,
+    };
+  }
   const grounded = String(answer.grounded ?? '').trim().toLowerCase() === 'yes' && summary !== '';
 
   if (!grounded) {

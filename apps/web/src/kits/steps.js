@@ -125,6 +125,7 @@ export const REASON_WORDS = Object.freeze({
   NO_PAGES_RETRIEVED: 'No company pages could be read, so no brief was written rather than one invented.',
   PAGES_TOO_THIN: 'The company pages had too little text to summarise.',
   MODEL_COULD_NOT_GROUND: 'Nothing on their site supported a summary, so none was written.',
+  BRIEF_ECHOED_INSTRUCTIONS: 'The summary repeated instructions from their site instead of describing the company, so it was withheld.',
 
   // --- public discussion -------------------------------------------------
   PUBLIC_DISCUSSION_FOUND: null,
