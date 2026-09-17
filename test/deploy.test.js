@@ -148,6 +148,14 @@ test('netlify.toml builds the web client from the root and publishes its dist', 
   await access(join(repoRoot, 'apps/web/scripts/redirects.js'));
 });
 
+test('the local dev server loads the root .env; the production start reads only the host environment', async () => {
+  const server = JSON.parse(await read('apps/server/package.json'));
+  // Workspace scripts run with apps/server as the working directory.
+  assert.match(server.scripts.dev, /--env-file-if-exists=\.\.\/\.\.\/\.env/);
+  assert.doesNotMatch(server.scripts.start, /env-file/, 'a deployed service is configured by its host, never by a stray file');
+  await access(join(repoRoot, 'apps/server', '../../.env.example'));
+});
+
 test('the server can be started by a host without watch mode', async () => {
   const { scripts } = JSON.parse(await read('package.json'));
   const server = JSON.parse(await read('apps/server/package.json'));
