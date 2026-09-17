@@ -21,12 +21,20 @@
  *   app with no password reset and no roles, it is the right trade — but it is a trade,
  *   not a free win.
  *
- * THE COOKIE IS httpOnly AND sameSite=lax. httpOnly puts it out of reach of JavaScript,
- * so an XSS flaw cannot read it. sameSite=lax means it is not attached to cross-site
- * POSTs, which is CSRF protection for every mutating endpoint here without a token
- * scheme. `secure` follows NODE_ENV: on in production, off locally, because a secure
- * cookie over plain http is simply never sent and the symptom is "login silently does
- * nothing".
+ * THE COOKIE IS ALWAYS httpOnly; SameSite AND Secure FOLLOW NODE_ENV. httpOnly puts it out
+ * of reach of JavaScript, so an XSS flaw cannot read it.
+ *
+ *   production  `SameSite=None; Secure`. The deployed web client is a static site on
+ *               another host, so the API is cross-site to it; a `Lax` cookie is set by
+ *               the sign-in response and then never attached to a `fetch`, and every
+ *               following request is a 401. `None` is only honoured with `Secure`.
+ *   locally     `SameSite=Lax`, no `Secure`: the Vite proxy makes the API same-origin,
+ *               and a secure cookie over plain http is never sent at all.
+ *
+ * `None` gives up the CSRF protection `Lax` provided — a hostile page can make the
+ * browser SEND a credentialed request even though CORS stops it reading the answer. That
+ * protection is restored in app.js, which refuses a state-changing request whose Origin
+ * is not the web client's.
  *
  * SIGNATURE COMPARISON IS CONSTANT-TIME. A fast `===` on an HMAC leaks, byte by byte,
  * how much of a forged signature was right.
@@ -100,13 +108,23 @@ export function decodeSession(value, { secret, now = Date.now } = {}) {
   return { ok: true, userId, expiresAt };
 }
 
+/**
+ * The cookie attributes for this environment — see the note at the top of the file.
+ *
+ * @param {{ isProduction?: boolean }} config
+ * @returns {{ secure: boolean, sameSite: 'None'|'Lax' }}
+ */
+export function cookiePolicy(config) {
+  return config?.isProduction ? { secure: true, sameSite: 'None' } : { secure: false, sameSite: 'Lax' };
+}
+
 /** Serialise a Set-Cookie header. Written by hand to avoid a cookie dependency. */
-function cookieHeader(name, value, { maxAgeMs, secure, path = '/' }) {
+function cookieHeader(name, value, { maxAgeMs, secure, sameSite, path = '/' }) {
   const parts = [
     `${name}=${value}`,
     `Path=${path}`,
     'HttpOnly',
-    'SameSite=Lax',
+    `SameSite=${sameSite}`,
     `Max-Age=${Math.floor(maxAgeMs / 1000)}`,
   ];
   if (secure) parts.push('Secure');
@@ -120,7 +138,7 @@ export function issueSession(response, { userId, config, now = Date.now, ttlMs =
 
   response.setHeader(
     'set-cookie',
-    cookieHeader(SESSION_COOKIE, value, { maxAgeMs: ttlMs, secure: config.isProduction })
+    cookieHeader(SESSION_COOKIE, value, { maxAgeMs: ttlMs, ...cookiePolicy(config) })
   );
   return { userId, expiresAt };
 }
@@ -129,7 +147,7 @@ export function issueSession(response, { userId, config, now = Date.now, ttlMs =
 export function clearSession(response, { config }) {
   response.setHeader(
     'set-cookie',
-    cookieHeader(SESSION_COOKIE, '', { maxAgeMs: 0, secure: config.isProduction })
+    cookieHeader(SESSION_COOKIE, '', { maxAgeMs: 0, ...cookiePolicy(config) })
   );
 }
 

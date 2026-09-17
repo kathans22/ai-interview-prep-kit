@@ -32,6 +32,9 @@ import { ApiError, createErrorHandler, notFound } from './errors.js';
 /** A JD is the largest thing a client legitimately sends. */
 export const MAX_BODY_BYTES = 512 * 1024;
 
+/** Methods that change nothing, so a cross-site origin on them is not a CSRF risk. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
 /**
  * Build the app.
  *
@@ -69,19 +72,44 @@ export function createApp({ store, config, deps = {}, log = console.error } = {}
   // --- 2. CORS, with credentials ------------------------------------------
   // Exactly one origin, never a wildcard: cookies are sent with credentials, and
   // `Access-Control-Allow-Origin: *` is invalid with credentials anyway. Reflecting the
-  // caller's origin would make the allowlist decorative.
+  // caller's origin would make the allowlist decorative. The configured origin is
+  // normalised by env.js, so a trailing slash in a dashboard cannot silently fail this.
+  const webOrigin = config.server?.webOrigin;
   app.use((request, response, next) => {
     const origin = request.headers.origin;
-    if (origin && origin === config.server.webOrigin) {
+    const allowed = Boolean(origin) && origin === webOrigin;
+
+    // Always, allowed or not: a cache in front of the API must not serve one origin's
+    // CORS answer to another.
+    response.setHeader('vary', 'Origin');
+    if (allowed) {
       response.setHeader('access-control-allow-origin', origin);
       response.setHeader('access-control-allow-credentials', 'true');
-      response.setHeader('vary', 'Origin');
     }
-    response.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
-    response.setHeader('access-control-allow-headers', 'content-type');
 
     if (request.method === 'OPTIONS') {
+      if (allowed) {
+        response.setHeader('access-control-allow-methods', 'GET,POST,PATCH,DELETE,OPTIONS');
+        response.setHeader('access-control-allow-headers', 'content-type');
+        response.setHeader('access-control-max-age', '600');
+      }
       response.status(204).end();
+      return;
+    }
+
+    // CSRF. The production cookie is `SameSite=None` (session.js), so a page on any site
+    // can make the browser SEND a credentialed POST here; CORS only stops it reading the
+    // reply, by which time the write has happened. Browsers always attach `Origin` to a
+    // cross-origin state-changing request, so one that names another site is refused
+    // before it reaches a route. No `Origin` means a same-origin request or a non-browser
+    // client, neither of which carries a victim's cookie from a hostile page.
+    if (origin && !allowed && !SAFE_METHODS.has(request.method)) {
+      next(
+        new ApiError(
+          'ORIGIN_NOT_ALLOWED',
+          'This request came from a site that is not allowed to change data here.'
+        )
+      );
       return;
     }
     next();

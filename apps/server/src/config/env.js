@@ -376,6 +376,7 @@ export function validateEnv(source = {}) {
     }
   }
 
+  let webOrigin = isBlank(source.WEB_ORIGIN) ? '' : String(source.WEB_ORIGIN).trim();
   if (!isBlank(source.WEB_ORIGIN)) {
     const raw = String(source.WEB_ORIGIN).trim();
     let parsed = null;
@@ -396,6 +397,37 @@ export function validateEnv(source = {}) {
           `WEB_ORIGIN must start with http:// or https://, got "${raw}".`
         )
       );
+    }
+
+    // CORS compares this with the browser's Origin header by exact string, and that header
+    // is scheme://host[:port] — nothing else. A value copied from a dashboard with a
+    // trailing slash matches no request, and every call fails as a CORS error with no
+    // server-side trace. A trailing slash is normalised away; an actual path is refused,
+    // because it suggests the value is not the origin the operator thinks it is.
+    if (parsed && (parsed.protocol === 'http:' || parsed.protocol === 'https:')) {
+      if ((parsed.pathname !== '/' && parsed.pathname !== '') || parsed.search || parsed.hash) {
+        problems.push(
+          problem(
+            'WEB_ORIGIN',
+            'CONFIG_MALFORMED',
+            `WEB_ORIGIN must be an origin only (scheme, host and port), got "${raw}".`
+          )
+        );
+      } else {
+        webOrigin = parsed.origin;
+      }
+
+      // The production cookie is `Secure; SameSite=None`, which a browser only keeps over
+      // https — an http web origin in production would be a login that never sticks.
+      if (environment === 'production' && parsed.protocol !== 'https:') {
+        problems.push(
+          problem(
+            'WEB_ORIGIN',
+            'CONFIG_INSECURE_ORIGIN',
+            `WEB_ORIGIN must be https when NODE_ENV=production, got "${raw}".`
+          )
+        );
+      }
     }
   }
 
@@ -445,7 +477,7 @@ export function validateEnv(source = {}) {
       },
       server: {
         port: numbers.PORT,
-        webOrigin: String(source.WEB_ORIGIN).trim(),
+        webOrigin,
         trustProxyHops: numbers.TRUST_PROXY_HOPS,
       },
     },

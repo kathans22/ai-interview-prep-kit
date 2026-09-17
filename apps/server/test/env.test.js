@@ -184,7 +184,10 @@ test('production must not permit private hosts', () => {
   assert.equal(unsafe.ok, false);
   assert.deepEqual(codesFor(unsafe, 'ALLOW_PRIVATE_HOSTS'), ['CONFIG_SSRF_RISK']);
 
-  const safe = validateEnv(validEnv({ NODE_ENV: 'production', ALLOW_PRIVATE_HOSTS: 'false' }));
+  // https: production refuses a plain-http web origin (its cookie is Secure).
+  const safe = validateEnv(
+    validEnv({ NODE_ENV: 'production', ALLOW_PRIVATE_HOSTS: 'false', WEB_ORIGIN: 'https://prep-kit.netlify.app' })
+  );
   assert.equal(safe.ok, true);
   assert.equal(safe.config.retrieval.allowPrivateHosts, false);
   assert.equal(safe.config.isProduction, true);
