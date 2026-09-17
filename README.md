@@ -16,6 +16,8 @@ The same pipeline runs from a batch command that turns a file of cases into a fi
 1. [Overview and tech stack](#1-overview-and-tech-stack)
 2. [Setup — local, deployed, and the batch command](#2-setup)
 3. [Gemini: model, limits and SDK](#3-gemini-model-limits-and-sdk)
+4. [Architecture](#4-architecture)
+5. [Retrieval](#5-retrieval)
 
 ---
 
@@ -310,3 +312,220 @@ build in the process:
 clone on someone else's machine, and the project supports Node 20.19+. The 2.x line runs on
 Node 20, 22 and 24 with the same call shape (`GoogleGenAI` → `ai.models.generateContent` →
 `response.text`), and nothing in 3.x is needed here.
+
+---
+
+## 4. Architecture
+
+```
+                 ┌──────────────────────── apps/web ────────────────────────┐
+  browser ──────▶│ React SPA · lib/api.js is the only fetch() · no core import│
+                 └───────────────────────────┬───────────────────────────────┘
+                                             │ JSON over HTTP, session cookie
+                 ┌────────────── apps/server ▼───────────────┐   ┌── apps/server/src/cli ──┐
+                 │ Express routes: auth, kits, edit (PATCH),  │   │ npm run evaluate        │
+                 │ regenerate/undo, progress (SSE + poll),    │   │ args → runBatch → envelope
+                 │ practice, score · in-process job runner    │   │                         │
+                 │ memoryStore / mongoStore (one contract)    │   │                         │
+                 └──────────────────────┬─────────────────────┘   └────────────┬────────────┘
+                                        │ buildKit(input, deps, hooks)          │ buildKit(…)
+                 ┌──────────────────────▼────────── packages/core ─────────────▼────────────┐
+                 │ orchestrator  buildKit · research · coverageLoop · timeGovernor ·        │
+                 │               checkpoints · assemble                                     │
+                 │ retrieval     urlGuard · fetchPage · robots · clean · crawl ·            │
+                 │               findHiringPage · searchPublicDiscussion · sourceLedger     │
+                 │ generation    extractRequirements · extractRoleProfile · summariseCompany│
+                 │               extractHiringProcess · routeCategories · generateQuestions │
+                 │               fillGaps · generateFlashcards                              │
+                 │ deterministic coverage · scheduleAllocator · verifySchedule ·            │
+                 │               verifyEvidence                                             │
+                 │ contracts     kitSchema · validateKit · emptyKit · ids · provenance ·    │
+                 │               merge                                                      │
+                 │ llm           provider · json (parse + repair) · retry · limiter ·      │
+                 │               budget · safePrompt · schema · fake + offline providers    │
+                 │ practice      orderCards          scoring   scoreAnswer · weakSpots      │
+                 └──────────────────────────────────────────────────────────────────────────┘
+```
+
+**Why `packages/core` is shared, not duplicated.** The brief's batch command must run *the
+same code the application uses*. That is only true if there is one implementation, so
+`buildKit` is the single function that produces a kit:
+- `POST /api/kits` records the request, answers `202` with a kit id, and hands `buildKit` to
+  the job runner.
+- `npm run evaluate` calls `buildKit` once per case.
+
+Neither adapter contains pipeline logic. They supply collaborators (a provider, a fetcher,
+a limiter, a store) and translate the result. The alternative, a route and a script that
+each assemble the steps, drifts within a stage. A fix to the crawl lands in one and not
+the other, and the graded batch output no longer describes the app anyone uses. With one
+function the claim is structural, and a test of `buildKit` tests both.
+
+**Everything is injected.** `buildKit` takes its provider, fetcher, robots checker, search
+provider, budget, clock and checkpoint store as arguments. That is how:
+- the batch command swaps in an offline provider with `--fake`
+- the test suite runs whole builds against local fixture sites with no network
+- a resumed build restores its checkpoints
+
+The API takes its store the same way, so every route, auth check and revision conflict is
+tested against an in-memory store that passes the same contract test as the MongoDB one.
+
+**What each side of the boundary knows.**
+- **Core** knows nothing about Express, MongoDB, the CLI or the environment. It never reads
+  `process.env` and never logs.
+- **The server** validates configuration at boot and refuses to start rather than limp. It
+  refuses:
+  - an unsafe `ALLOW_PRIVATE_HOSTS` (§5)
+  - an unpinned or retired model id
+  - a weak session secret
+  - an http web origin in production
+
+  It warns, and still starts, about a daily limit too small for a batch run or a blank
+  search key.
+- **The client** holds no business rules. Where it must predict the server (input limits,
+  which items a regeneration would replace), it mirrors core in one module, and a test
+  holds the mirror to the original.
+
+**A build, end to end.**
+1. The browser posts the posting, company URL and day count.
+2. The API validates the input and checks idempotency: the same submission within 15
+   minutes returns the existing kit.
+3. The API writes a `queued` kit and answers `202`.
+4. The job runner (two builds at a time, sharing one limiter) calls `buildKit`. Each step's
+   progress is streamed over server-sent events **and** persisted to the kit, so a page
+   that reloads, or connects late, sees what already happened.
+5. After each expensive step a checkpoint is saved on the kit. An interrupted build
+   resumes without repeating finished calls or re-fetching pages.
+6. When `buildKit` returns, the kit has already passed both validators. The job writes it
+   as `ready`.
+7. If the process restarts mid-build, boot marks the orphaned kit `BUILD_INTERRUPTED`, and
+   the page offers to continue it.
+
+---
+
+## 5. Retrieval
+
+Retrieval answers four questions about the company:
+- what its site says
+- which page describes how it hires
+- what the public says about interviewing there
+- which of those sources the kit may cite
+
+Every step degrades: an unreachable site, a missing hiring page or an empty search is
+recorded in the kit and the build continues.
+
+### Link ranking — best-first, from evidence
+
+The crawler starts at the company URL and **discovers** links from the pages it fetches.
+Each link is scored from evidence:
+
+| Signal | Effect |
+|---|---|
+| Hiring words in the slug or anchor | `how-we-hire` +10, `hiring` / `interview` +8, `careers` / `jobs` / `recruiting` / `join-us` +7 |
+| Where processes actually live | `handbook` / `work-with-us` +6, `process` / `playbook` / `life-at` / `working-at` +5 |
+| Context for the company brief | `about` / `engineering` / `culture` +4, `mission` / `values` / `team` / `people` +3, `blog` +2 |
+| Pages that are never useful | `login` / `signin` −10, `privacy` / `legal` / `terms` / `cookie` / `checkout` −8, `pricing` −5, feeds and archives −3 to −6 |
+| Same origin | +5; off-origin −6 |
+| Depth | −0.75 per path segment, −1.5 per link hop |
+| Anchor text present | +1 |
+| Asset URLs (images, PDFs, scripts) | never fetched |
+
+The frontier is **re-sorted every round**, so a strong link found two hops in is fetched
+before a weak one found first. Links scoring at or below zero are not fetched. The crawl
+stops at 12 pages or 2 hops.
+
+Every link not fetched is returned with a reason: budget reached, low score, robots,
+refused, failed. Every signal behind a score is returned too, so a ranking decision can be
+explained, not just trusted.
+
+### Finding the hiring page — no hardcoded paths
+
+There is no list of `/careers`, `/jobs`, `/about`. A guessed path finds only the pages that
+were already easy to find. The acme fixture keeps its process at `/acme/handbook/how-we-hire`,
+and real companies put theirs in a handbook, an engineering blog, a Notion export or a
+"life at" microsite.
+
+1. **Candidates come from pages actually fetched**, re-scored on the page's own title and
+   first headings. A page titled "How we hire" is a candidate even if its URL said nothing.
+2. **The obvious case costs no call.** If the top candidate scores 15 or more and its URL
+   or title reads as hiring, it is accepted.
+3. **Otherwise one short model call confirms.** The model sees the top five candidates —
+   URL, title and the first 700 characters, as fenced data — and returns one URL with a
+   confidence from 1 to 5, or an empty string.
+4. **The answer is held to the list.** A URL that is not exactly one of the candidates is
+   refused, and so is confidence below 3. The first rule is also an injection defence: a
+   page cannot redirect the crawler by naming a URL in its text.
+5. **No page is a correct answer.** The kit records `NO_HIRING_PAGE_FOUND` and skips the
+   hiring-process step, so no call is spent inventing a process. A kit that presented the
+   pricing page as the interview process would be worse than one that says it found none.
+
+When a page is found, one call extracts the process as **machine-usable stages**: a closed
+set of kinds such as `take-home` and `system-design`. Those stages change which question
+categories each requirement gets (§6).
+
+### Sources used — only what was fetched
+
+`sourceLedger` records every fetch, skip, robots decision and search, and it is the only
+thing that may write provenance:
+- `source.pages_used` and `company_brief.sources` list **only URLs that were fetched
+  successfully**.
+- A URL a page linked to, or one a model mentioned, never reaches the kit.
+- If retrieval returned no usable pages, **the company-brief call is not made at all**, and
+  the brief says the site could not be read. A model asked to describe a company from its
+  name alone will do so fluently, and from nothing.
+
+**Public discussion search** always runs, because an attempt with no results is a different
+fact from never looking:
+- one Tavily query: `<company> <role> interview process experience`, up to five results
+- under time pressure it narrows to one result; it is never skipped
+- each outcome is recorded with its own reason: results found, an empty result
+  (including when no search key is set), a failed provider, or a search that could not
+  run because the posting named no company
+
+Snippets reach the model **labelled unverified**. They may corroborate what a fetched page
+says, never stand alone as a fact about the company.
+
+### robots.txt and fetching
+
+- **One `robots.txt` per origin**, cached. The most specific matching rule wins, with
+  `Allow` beating `Disallow` on a tie. An empty `Disallow:` allows everything. A disallowed
+  path is not fetched, and the skip is recorded.
+- **A missing or unreadable `robots.txt` means allowed**, as the standard intends. "No file"
+  and "could not find out" are recorded as different reasons.
+- **Every fetch has limits.** Each request:
+  - times out after 10 seconds, and follows at most 5 redirects
+  - accepts `text/html` and `text/plain` only
+  - is abandoned while streaming once it passes 2 MB. A missing or lying `Content-Length`
+    cannot get past that.
+- **Retries are narrow.** A timeout, a network error or a 5xx is retried once; a 404 is not.
+- **Nothing throws.** Every outcome is a value with a reason, so one dead link never ends a
+  case.
+- **Cleaning.** `script`, `style`, `noscript`, `template`, `svg` and `iframe` are removed
+  before anything else is read, so a string inside a script cannot plant a crawl target.
+  Navigation and footers are excluded from body text, but their links are kept: a careers
+  link in a footer is exactly the link the crawler is looking for.
+
+### The loopback tension, and the environment gate
+
+The brief pulls in two directions here:
+- **Section 11 of the brief requires rejecting private and loopback addresses.** A crawler
+  that fetches user-supplied URLs is an SSRF hole. Point it at `http://169.254.169.254/` and
+  it reads cloud instance credentials; point it at `http://localhost:27017` and it probes
+  the deploy's own network.
+- **The batch command's own fixture sites are served from `http://localhost:8099`.** A
+  guard that always refuses loopback makes every sample case report its site unreachable.
+
+The two cannot both be satisfied by one fixed rule, so the rule is **gated by
+environment**, and the gate is explicit:
+- **`urlGuard` judges the resolved address, not the spelling.** It resolves the hostname and
+  checks every address it returns. `localhost`, `127.0.0.1`, `0x7f.1` and a public name
+  whose DNS points at `10.0.0.5` are all refused alike. It re-checks **every redirect hop**,
+  so a public URL that 302s to a private one is caught, and a host with one public and one
+  private address is refused.
+- **`ALLOW_PRIVATE_HOSTS` must be stated in the environment.** It is never inferred, so a
+  mistyped `NODE_ENV` cannot quietly open the crawler.
+- **`true` only on a developer's machine**, so the local fixture sites can be crawled.
+  `npm run evaluate -- --fake` defaults it to `true`, prints that it did so, and still
+  obeys an explicit `false`.
+- **`false` in production, and enforced.** With `NODE_ENV=production`, a value of `true` is
+  a fatal configuration error (`CONFIG_SSRF_RISK`), and the server does not start. A warning
+  in a deploy log is a warning nobody reads.
