@@ -161,6 +161,21 @@ async function giveKitTo(email) {
 /** Every scoring request the fake provider saw, so a test can check what was sent. */
 const scoreCalls = [];
 
+/** Every build the job runner started, in order — how a test proves one did NOT start. */
+const builds = [];
+
+/** marker -> { opened, open }: a build whose posting contains the marker waits for open(). */
+const buildGates = new Map();
+
+function gateBuild(marker) {
+  let open;
+  const opened = new Promise((resolve) => {
+    open = resolve;
+  });
+  buildGates.set(marker, { opened, open });
+  return open;
+}
+
 before(async () => {
   store = createMemoryStore();
 
@@ -222,7 +237,16 @@ before(async () => {
 
   jobs = createJobRunner({
     store,
-    build: async () => ({ kit: seedKit(), notes: [] }),
+    build: async (input) => {
+      builds.push(input);
+      // A posting naming a gate waits for the test to open it, so a build can be caught
+      // genuinely in flight rather than hoped to be.
+      const gate = [...buildGates.keys()].find((marker) => input.jd.includes(marker));
+      if (gate) await buildGates.get(gate).opened;
+      // A posting carrying this marker fails outright, as a build with no model would.
+      if (input.jd.includes('FAIL_THIS_BUILD')) throw new Error('simulated total build failure');
+      return { kit: seedKit(), notes: [] };
+    },
   });
 
   app.mountRoutes((instance) => {
@@ -790,6 +814,143 @@ test('two users submitting the same posting each get their own kit', async () =>
   assert.notEqual(his.body.kitId, hers.body.kitId);
 
   await jobs.drain();
+});
+
+// ===========================================================================
+// EDGE CASE 7 — same description and company twice → idempotent, returns the existing kit
+// ===========================================================================
+
+/**
+ * One account for every edge 7 test. Each posting carries its own marker, so the tests
+ * cannot find each other's kits — and sign-up is rate limited per client, so five more
+ * accounts would push later tests in this file over the limit.
+ */
+let edge7Account = null;
+function edge7User() {
+  edge7Account ??= (async () => {
+    const user = client();
+    await user.signUp('edge7@example.com');
+    return user;
+  })();
+  return edge7Account;
+}
+
+test('edge 7: the same description and company, resubmitted once the kit is ready, returns that kit', async () => {
+  const alice = await edge7User();
+
+  const body = JSON.stringify({ jd: `${JD} edge7-ready`, company_url: 'https://kestrel.example/careers', days: 5 });
+  const first = await alice.call('/api/kits', { method: 'POST', body });
+  assert.equal(first.status, 202);
+  await jobs.drain();
+
+  const ready = await alice.call(`/api/kits/${first.body.kitId}`);
+  assert.equal(ready.body.status, 'ready');
+  const buildsBefore = builds.length;
+
+  const second = await alice.call('/api/kits', { method: 'POST', body });
+
+  assert.equal(second.status, 200, 'nothing new was accepted');
+  assert.equal(second.body.duplicate, true);
+  assert.equal(second.body.kitId, first.body.kitId, 'the existing kit is returned');
+  assert.equal(second.body.status, 'ready', 'and the client is told it can open it now');
+  assert.equal(second.body.reason, 'DUPLICATE_READY');
+  assert.match(second.body.message, /already built/i);
+
+  await jobs.drain();
+  assert.equal(builds.length, buildsBefore, 'no second build ran, so no quota was spent twice');
+
+  const reopened = await alice.call(`/api/kits/${second.body.kitId}`);
+  assert.deepEqual(reopened.body.kit, ready.body.kit, 'it is the same kit, unchanged');
+});
+
+test('edge 7: a resubmission while the first is still building points at the build in flight', async () => {
+  const alice = await edge7User();
+
+  const open = gateBuild('edge7-inflight');
+  const body = JSON.stringify({ jd: `${JD} edge7-inflight`, company_url: 'https://kestrel.example/', days: 5 });
+
+  const first = await alice.call('/api/kits', { method: 'POST', body });
+  assert.equal(first.status, 202);
+  assert.notEqual((await alice.call(`/api/kits/${first.body.kitId}`)).body.status, 'ready', 'the build is held open');
+
+  // The double click: the same submission again while the first is still being built.
+  const second = await alice.call('/api/kits', { method: 'POST', body });
+  assert.equal(second.status, 200);
+  assert.equal(second.body.duplicate, true);
+  assert.equal(second.body.kitId, first.body.kitId, 'pointed at the build already running');
+  assert.equal(second.body.reason, 'DUPLICATE_IN_FLIGHT');
+
+  open();
+  await jobs.drain();
+  assert.equal((await alice.call(`/api/kits/${first.body.kitId}`)).body.status, 'ready');
+  assert.equal(builds.filter((input) => input.jd.includes('edge7-inflight')).length, 1, 'one build for two clicks');
+});
+
+test('edge 7: differences that do not change the submission still find the existing kit', async () => {
+  const alice = await edge7User();
+
+  const jd = `${JD}\nedge7-cosmetic\n\nApply by Friday.`;
+  const first = await alice.call('/api/kits', {
+    method: 'POST',
+    body: JSON.stringify({ jd, company_url: 'https://kestrel.example/careers', days: 5 }),
+  });
+  assert.equal(first.status, 202);
+  await jobs.drain();
+
+  // Windows line endings, trailing spaces, extra blank lines, surrounding whitespace, a
+  // shouted hostname and a fragment: the same posting and the same company.
+  const cosmetic = {
+    jd: `  ${JD}   \r\nedge7-cosmetic  \r\n\r\n\r\n\r\nApply by Friday.\r\n  `,
+    company_url: '  HTTPS://Kestrel.Example/careers#open-roles ',
+    days: 5,
+  };
+  const again = await alice.call('/api/kits', { method: 'POST', body: JSON.stringify(cosmetic) });
+
+  assert.equal(again.status, 200);
+  assert.equal(again.body.duplicate, true);
+  assert.equal(again.body.kitId, first.body.kitId);
+});
+
+test('edge 7: a different company, day count or description is a different kit', async () => {
+  const alice = await edge7User();
+
+  const submission = { jd: `${JD} edge7-different`, company_url: 'https://kestrel.example/', days: 5 };
+  const original = await alice.call('/api/kits', { method: 'POST', body: JSON.stringify(submission) });
+  assert.equal(original.status, 202);
+
+  const variants = [
+    { ...submission, company_url: 'https://heron.example/' },
+    { ...submission, company_url: '' },
+    { ...submission, days: 6 },
+    { ...submission, jd: `${submission.jd} Also: on-call one week in six.` },
+  ];
+  const ids = new Set([original.body.kitId]);
+  for (const variant of variants) {
+    const response = await alice.call('/api/kits', { method: 'POST', body: JSON.stringify(variant) });
+    assert.equal(response.status, 202, `${JSON.stringify(variant).slice(-60)} is a new submission`);
+    assert.equal(response.body.duplicate, false);
+    ids.add(response.body.kitId);
+  }
+  assert.equal(ids.size, variants.length + 1, 'every one got its own kit');
+
+  await jobs.drain();
+});
+
+test('edge 7: a failed kit is not returned — resubmitting builds again', async () => {
+  const alice = await edge7User();
+
+  const body = JSON.stringify({ jd: `${JD} edge7-failed FAIL_THIS_BUILD`, company_url: 'https://kestrel.example/', days: 5 });
+  const first = await alice.call('/api/kits', { method: 'POST', body });
+  await jobs.drain();
+  assert.equal((await alice.call(`/api/kits/${first.body.kitId}`)).body.status, 'failed');
+
+  const retry = await alice.call('/api/kits', { method: 'POST', body });
+  assert.equal(retry.status, 202, 'yesterday\'s transient failure must not block a retry');
+  assert.equal(retry.body.duplicate, false);
+  assert.notEqual(retry.body.kitId, first.body.kitId);
+
+  await jobs.drain();
+  assert.equal(builds.filter((input) => input.jd.includes('edge7-failed')).length, 2);
 });
 
 // ===========================================================================
