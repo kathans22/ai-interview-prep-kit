@@ -27,7 +27,8 @@ import { createNoopSearchProvider, SEARCH_REASONS } from '../retrieval/searchPub
 import { HIRING_PAGE_REASONS } from '../retrieval/findHiringPage.js';
 import { createSourceLedger } from '../retrieval/sourceLedger.js';
 import { createFixtureProvider } from '../llm/offlineProvider.js';
-import { createGeminiProvider, LLM_ERROR_CODES } from '../llm/provider.js';
+import { createGeminiProvider, LlmError, LLM_ERROR_CODES, RATE_LIMIT_KINDS } from '../llm/provider.js';
+import { configureLimiterFor, resetLimiterForTests } from '../llm/limiter.js';
 import { fakeResponse } from '../llm/fakeProvider.js';
 import { validateKit } from '../contracts/validateKit.js';
 import { verifySchedule } from '../deterministic/verifySchedule.js';
@@ -579,4 +580,149 @@ test('edge 5: a truncated question call leaves its requirements to the coverage 
   assert.ok(kit.run_notes.includes(`The technical question call failed (${LLM_ERROR_CODES.INVALID_OUTPUT}).`));
   assert.deepEqual(kit.coverage.uncovered_requirement_ids, [], 'the gap-fill pass covered what the failed call would have');
   assert.equal(kit.coverage.passes, 2);
+});
+
+// ===========================================================================
+// EDGE CASE 6 — Gemini rate-limits or briefly fails → shared limiter, backoff, completes
+// ===========================================================================
+
+/**
+ * A clock that only moves when the limiter sleeps, so pacing costs no real time.
+ *
+ * The sleep yields a macrotask BEFORE advancing. With two builds running, a request that
+ * was just admitted reaches the provider a few microtasks later; a sleep that advanced
+ * the clock synchronously would let the next waiter move time forward first, stamping
+ * the earlier request with the later request's time.
+ */
+function virtualClock() {
+  let now = 0;
+  return {
+    now: () => now,
+    sleep: async (ms) => {
+      await new Promise((resolve) => setImmediate(resolve));
+      now += ms;
+    },
+  };
+}
+
+/**
+ * The offline provider, refusing the first `times` calls to a step the way Gemini does: a
+ * 429 carrying a short Retry-After, or a 503 carrying none. Every call that reaches it is
+ * stamped with the virtual time, so the spacing the limiter imposed can be read back.
+ */
+function flakyProvider(model, clock, refusals) {
+  const offline = createFixtureProvider();
+  const left = new Map(Object.entries(refusals).map(([step, refusal]) => [step, { ...refusal }]));
+  const calls = [];
+
+  return {
+    name: 'flaky',
+    model,
+    calls,
+    callsFor: (step) => calls.filter((call) => call.step === step),
+    countTokens: async () => 100,
+    async complete(request) {
+      calls.push({ step: request.step, at: clock.now() });
+      const refusal = left.get(request.step);
+      if (refusal && refusal.times > 0) {
+        refusal.times -= 1;
+        if (refusal.status === 503) {
+          throw new LlmError(LLM_ERROR_CODES.UNAVAILABLE, `simulated 503 for ${request.step}`, {
+            step: request.step,
+            status: 503,
+            retryable: true,
+          });
+        }
+        throw new LlmError(LLM_ERROR_CODES.RATE_LIMITED, `simulated 429 for ${request.step}`, {
+          step: request.step,
+          status: 429,
+          limit: RATE_LIMIT_KINDS.RPM,
+          retryAfterMs: 5,
+          retryable: true,
+        });
+      }
+      return offline.complete(request);
+    },
+  };
+}
+
+/** 30 requests a minute, one at a time: every request at least two virtual seconds apart. */
+const RPM = 30;
+const SPACING_MS = 60_000 / RPM;
+
+test('edge 6: 429s and a 503 across a whole build back off through the shared limiter and complete', async (t) => {
+  const model = 'edge-rate-limited';
+  const clock = virtualClock();
+  const limiter = configureLimiterFor(model, { rpm: RPM, tpm: 1_000_000, rpd: 500, now: clock.now, sleep: clock.sleep });
+  t.after(() => resetLimiterForTests());
+
+  const provider = flakyProvider(model, clock, {
+    'extract-requirements': { times: 2 },
+    'questions:behavioural': { times: 1 },
+    'company-brief': { times: 1, status: 503 },
+  });
+  const result = await buildKit(
+    { jd: JD, company_url: `${server.origin}/acme/`, days: 5 },
+    deps({ provider }),
+    {}
+  );
+  const untroubled = await buildKit({ jd: JD, company_url: `${server.origin}/acme/`, days: 5 }, deps(), {});
+
+  // Completes, and as if nothing had happened.
+  assert.equal(validateKit(result.kit).valid, true);
+  assert.deepEqual(result.kit.role.requirements, untroubled.kit.role.requirements);
+  assert.equal(result.kit.questions.length, untroubled.kit.questions.length);
+  assert.equal(result.kit.company_brief.summary, untroubled.kit.company_brief.summary);
+  assert.deepEqual(result.state.failedCategories ?? [], []);
+  assert.equal(
+    result.kit.run_notes.some((note) => /failed|RATE_LIMITED|UNAVAILABLE/.test(note)),
+    false,
+    `a refusal that cleared is not a failure: ${JSON.stringify(result.kit.run_notes)}`
+  );
+
+  // Backoff: each refused step was simply asked again, until it answered.
+  assert.equal(provider.callsFor('extract-requirements').length, 3);
+  assert.equal(provider.callsFor('questions:behavioural').length, 2);
+  assert.equal(provider.callsFor('company-brief').length, 2);
+
+  // Shared limiter: EVERY attempt, retries included, was admitted by the one limiter for
+  // this model — nothing reached the provider around it — and was paced by it.
+  const report = limiter.report();
+  assert.equal(report.admitted, provider.calls.length);
+  assert.ok(report.waitedMs > 0, 'the limiter made requests wait');
+  for (let index = 1; index < provider.calls.length; index += 1) {
+    const gap = provider.calls[index].at - provider.calls[index - 1].at;
+    assert.ok(gap >= SPACING_MS, `calls ${index - 1} and ${index} were ${gap}ms apart, under ${SPACING_MS}ms`);
+  }
+
+  // Retries are not repairs: a refused request spends nothing extra from the call budget.
+  assert.equal(result.budget.breakdown[STEPS.REQUIREMENTS], 1);
+});
+
+test('edge 6: two builds at once share one limiter rather than each pacing alone', async (t) => {
+  const model = 'edge-shared-limiter';
+  const clock = virtualClock();
+  const limiter = configureLimiterFor(model, { rpm: RPM, tpm: 1_000_000, rpd: 500, now: clock.now, sleep: clock.sleep });
+  t.after(() => resetLimiterForTests());
+
+  const first = flakyProvider(model, clock, { 'extract-requirements': { times: 1 } });
+  const second = flakyProvider(model, clock, { 'questions:technical': { times: 1 } });
+
+  const [one, two] = await Promise.all([
+    buildKit({ jd: JD, company_url: '', days: 3 }, deps({ provider: first }), {}),
+    buildKit({ jd: STUB_JD, company_url: '', days: 3 }, deps({ provider: second }), {}),
+  ]);
+
+  assert.equal(validateKit(one.kit).valid, true);
+  assert.equal(validateKit(two.kit).valid, true);
+
+  // Both builds' requests interleave through one bucket: taken together, in the order they
+  // reached the model, no two are closer than one limiter slot. Two limiters would each
+  // be spaced correctly and still send twice the rate between them.
+  const all = [...first.calls, ...second.calls].sort((left, right) => left.at - right.at);
+  assert.equal(limiter.report().admitted, all.length);
+  assert.ok(first.calls.length > 0 && second.calls.length > 0);
+  for (let index = 1; index < all.length; index += 1) {
+    assert.ok(all[index].at - all[index - 1].at >= SPACING_MS, `two requests ${all[index].at - all[index - 1].at}ms apart`);
+  }
 });
