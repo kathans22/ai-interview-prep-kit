@@ -41,6 +41,14 @@
  * regenerated — buys nothing. This needs no state beyond the ratings already recorded, is
  * obvious to explain, and behaves sensibly over three days.
  *
+ * MISSED POINTS PULL CARDS FORWARD. When a scored answer missed a requirement, every card
+ * covering it is pulled forward by WEAK_PULL (0.6) — like the recency push, LESS THAN ONE
+ * RATING STEP. So a weak area resurfaces early without overriding what the person said
+ * about a card: a "good" card on a weak requirement (2.4) comes before unseen cards (2.5)
+ * but never before a card they found hard (2); an unseen card on a weak requirement (1.9)
+ * comes before hard cards but never before an "again" (1). The order knows nothing about
+ * scoring — it receives requirement ids, decided by `scoring/weakSpots.js`.
+ *
  * RATINGS FOLLOW THE CARD ID. A regeneration that replaces a card keeps its id, so the new
  * card inherits the old card's ratings. The alternative — ignoring ratings older than the
  * card's `updatedAt` — was considered and rejected: `updatedAt` also moves when a card is
@@ -59,6 +67,9 @@ export const RECENCY_PUSH_MAX = 0.75;
 
 /** How quickly that push fades: it halves every thirty minutes. */
 export const RECENCY_HALF_LIFE_MS = 30 * 60 * 1000;
+
+/** How far a card covering a requirement a scored answer missed is pulled forward. Under one step. */
+export const WEAK_PULL = 0.6;
 
 const isRating = (value) => Number.isInteger(value) && value >= RATING_VALUES.again && value <= RATING_VALUES.easy;
 
@@ -114,22 +125,27 @@ export function latestRatings(entries) {
  * @param {Array<{ id: string }>} input.cards  the kit's flashcards, in the kit's order
  * @param {Array<{ cardId?: string, confidence: number, at?: string|Date }>} input.ratings  the practice log
  * @param {number} [input.now]  milliseconds since the epoch
- * @returns {Array<{ id: string, priority: number, seen: boolean, latest: number|null, attempts: number, lastAt: string|null }>}
+ * @param {string[]} [input.weakRequirements]  requirement ids a scored answer missed most recently
+ * @returns {Array<{ id: string, priority: number, seen: boolean, weak: boolean, latest: number|null, attempts: number, lastAt: string|null }>}
  */
-export function orderCards({ cards, ratings, now = Date.now() } = {}) {
+export function orderCards({ cards, ratings, now = Date.now(), weakRequirements = [] } = {}) {
   const latest = latestRatings(ratings);
+  const weakIds = new Set(Array.isArray(weakRequirements) ? weakRequirements : []);
 
   return (Array.isArray(cards) ? cards : [])
     .filter((card) => card && card.id)
     .map((card, position) => {
+      const weak = (Array.isArray(card.requirement_ids) ? card.requirement_ids : []).some((id) => weakIds.has(id));
+      const pull = weak ? WEAK_PULL : 0;
       const rating = latest.get(card.id);
       if (!rating) {
-        return { id: card.id, priority: UNSEEN_PRIORITY, seen: false, latest: null, attempts: 0, lastAt: null, position };
+        return { id: card.id, priority: UNSEEN_PRIORITY - pull, seen: false, weak, latest: null, attempts: 0, lastAt: null, position };
       }
       return {
         id: card.id,
-        priority: rating.value + recencyPush(rating.at, now),
+        priority: rating.value + recencyPush(rating.at, now) - pull,
         seen: true,
+        weak,
         latest: rating.value,
         attempts: rating.attempts,
         lastAt: rating.at,

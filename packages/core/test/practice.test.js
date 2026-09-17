@@ -9,6 +9,7 @@ import {
   RECENCY_HALF_LIFE_MS,
   RECENCY_PUSH_MAX,
   UNSEEN_PRIORITY,
+  WEAK_PULL,
   latestRatings,
   orderCards,
   recencyPush,
@@ -119,6 +120,47 @@ test('EXIT CHECK, in miniature: a card rated "again" returns near the front of t
   // Half the deck unpractised: the failed card still leads the unseen ones.
   const partial = orderCards({ cards: deck, ratings: [rating('f1', 4, 60_000), rating('f3', 1, 10_000)], now: NOW });
   assert.deepEqual(ids(partial).slice(0, 2), ['f3', 'f2']);
+});
+
+// --- weak spots from scored answers ----------------------------------------------------
+
+const withReqs = (id, ...requirementIds) => ({ id, front: `front ${id}`, back: `back ${id}`, requirement_ids: requirementIds });
+
+test('the weak pull is under one rating step, like the recency push', () => {
+  assert.ok(WEAK_PULL > 0 && WEAK_PULL < 1);
+  assert.ok(UNSEEN_PRIORITY - WEAK_PULL < RATING_VALUES.hard, 'an unseen weak card comes before hard cards');
+  assert.ok(UNSEEN_PRIORITY - WEAK_PULL > RATING_VALUES.again, 'but never before an again');
+  assert.ok(RATING_VALUES.good - WEAK_PULL < UNSEEN_PRIORITY, 'a good weak card comes before unseen cards');
+  assert.ok(RATING_VALUES.good - WEAK_PULL > RATING_VALUES.hard, 'but never before a hard one');
+});
+
+test('a card covering a missed requirement resurfaces early without overriding what the person said', () => {
+  const ordered = orderCards({
+    cards: [withReqs('again', 'r9'), withReqs('hard', 'r9'), withReqs('unseen', 'r9'), withReqs('goodWeak', 'r2'), withReqs('unseenWeak', 'r2')],
+    ratings: [rating('again', 1, DAY), rating('hard', 2, DAY), rating('goodWeak', 3, DAY)],
+    now: NOW,
+    weakRequirements: ['r2'],
+  });
+  assert.deepEqual(ids(ordered), ['again', 'unseenWeak', 'hard', 'goodWeak', 'unseen']);
+  assert.deepEqual(
+    ordered.map((card) => [card.id, card.weak]),
+    [
+      ['again', false],
+      ['unseenWeak', true],
+      ['hard', false],
+      ['goodWeak', true],
+      ['unseen', false],
+    ]
+  );
+});
+
+test('with no weak requirements the order and priorities are exactly as before', () => {
+  const input = { cards: [withReqs('f1', 'r1'), withReqs('f2', 'r2')], ratings: [rating('f1', 3, DAY)], now: NOW };
+  const plain = orderCards(input);
+  const empty = orderCards({ ...input, weakRequirements: [] });
+  assert.deepEqual(plain, empty);
+  assert.ok(plain.every((card) => card.weak === false));
+  assert.equal(plain.find((card) => card.id === 'f2').priority, UNSEEN_PRIORITY);
 });
 
 test('no cards, or no ratings, is an ordinary answer rather than an error', () => {
