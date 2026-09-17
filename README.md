@@ -18,6 +18,10 @@ The same pipeline runs from a batch command that turns a file of cases into a fi
 3. [Gemini: model, limits and SDK](#3-gemini-model-limits-and-sdk)
 4. [Architecture](#4-architecture)
 5. [Retrieval](#5-retrieval)
+6. [The research and generation sequence](#6-the-research-and-generation-sequence)
+7. [The batching defence](#7-the-batching-defence)
+8. [Coverage passes](#8-coverage-passes)
+12. [Budgets and degradation](#12-budgets-and-degradation)
 
 ---
 
@@ -529,3 +533,212 @@ environment**, and the gate is explicit:
 - **`false` in production, and enforced.** With `NODE_ENV=production`, a value of `true` is
   a fatal configuration error (`CONFIG_SSRF_RISK`), and the server does not start. A warning
   in a deploy log is a warning nobody reads.
+
+---
+
+## 6. The research and generation sequence
+
+**The code decides everything that has a right answer. The model reads, writes, and judges
+language.** Nothing a rule can decide is sent to a model. A model is slower, costs a call
+from a small daily allowance, answers differently on a second run, and cannot be asserted
+in a test.
+
+The fourteen steps of `buildKit`, in order. **M** marks a model call; **C** marks code.
+
+| # | Step | | What happens |
+|---|---|---|---|
+| 1 | Requirements | M + C | The model lists requirements, each with a kind, a priority and an **evidence quote** copied from the posting. Code then: validates the shape, merges duplicates, caps the list at 20, assigns ids, and **drops any requirement whose quote cannot be found in the posting** (§11). The one fatal failure: no requirements, no kit. |
+| 2 | Role profile | M | Title, seniority, company, location and responsibilities, from the posting alone. An unstated field is `""`, never a guess. |
+| 3 | Crawl | C | Best-first crawl of the company site (§5). |
+| 4 | Hiring page | C (+ M) | Candidates ranked in code; one short confirmation call only when the answer is not obvious. |
+| 5 | Public discussion | C | One search, always attempted, recorded either way. |
+| 6 | Company brief | M | From fetched pages only; no call at all when nothing was fetched; withheld if the answer repeats instructions instead of describing the company. |
+| 7 | Hiring process | M | Only when a hiring page was found: stages from a closed set of kinds. |
+| 8 | Questions | C, then M ×≤4 | **Code routes** each requirement to categories; then **one call per category** (§7). Code assigns ids and discards any question citing a requirement outside the call. |
+| 9 | Coverage | C | Which requirements have no question: id set arithmetic. |
+| 10 | Gap fill | M, looped | Questions for exactly the uncovered must-haves, until coverage is complete or the loop stops (§8). |
+| 11 | Flashcards | C, then M | **Code picks** which requirements can carry a card; the model writes fronts and backs. Optional under pressure (§12). |
+| 12 | Schedule | C | Day-by-day allocation (§10). |
+| 13 | Assemble | C | The kit, with provenance, `run_notes`, dropped requirements, and the sources the ledger vouches for. |
+| 14 | Validate | C | `validateKit` (the contract) **and** `verifySchedule` (the schedule makes sense). A kit that fails either is never returned. |
+
+Requirements and the role profile run **first**, from the posting alone. They are what
+survives when a company site is dead, the budget runs out, or the clock expires. The
+company research follows because the hiring process **changes the question plan**.
+
+### What the code decides, and why each is code
+
+| Decision | Why it is code |
+|---|---|
+| **Coverage** — is requirement `r4` covered? | It is covered when some question lists `r4` in `requirement_ids`. That is set membership: exact, free, instant, testable. A model asked "what is missing?" always finds something, so a loop built on it never ends. |
+| **Schedule allocation** | Minutes, ordering and day assignment are arithmetic over difficulty, category and priority (§10). The schedule must have exactly N days and integer minutes — a model estimates both, and code gets both right every time. |
+| **Category routing** | "Mentoring juniors" deserves behavioural questions, and "owns a high-throughput API" deserves system design. That is a rule a person can write down, extended by the hiring process: a company that runs a system-design round gets system-design questions for requirements that can carry one. Deterministic, so two runs on the same posting ask the same kinds of questions. |
+| **Whether a requirement is real** | `verifyEvidence` checks the quote against the posting in three tiers: exact line, normalised substring, and content-word overlap of at least 0.6. A requirement the posting does not support is dropped and listed in the kit as dropped. |
+| **Which gaps are worth a call** | Only `must` gaps start another pass. A nice-to-have gap is recorded, not chased. |
+| **Which requirements get flashcards** | Not behavioural ones. A card whose answer is the candidate's own story cannot be revised from. |
+| **Sources, provenance, ids, merges, conflicts** | Bookkeeping has right answers (§5, §9). |
+| **Repair, truncation, budget, pacing** | A response cut off at the token limit is detected from `finishReason` and never "repaired" — the same limit would cut the repair too. Invalid JSON gets exactly one repair, which is charged to the budget (§12). |
+
+**What the model decides:**
+- which lines of the posting are requirements, their kind and priority from the posting's
+  wording, and the quote that supports each
+- what the role profile says
+- which candidate is the hiring page, when that isn't obvious
+- what the company does, from its pages
+- the stages of its process
+- the wording of every question, answer outline and flashcard, and each question's
+  difficulty
+- in answer scoring, whether an answer hit or missed each point (§13)
+
+Every model call:
+- sends our instructions in `systemInstruction` only
+- sends everything we did not write (the posting, pages, snippets, typed answers) in
+  `contents`, inside a fenced data block that forged fence markers cannot close
+- is constrained by a response schema, and parsed and validated before its output is used
+
+---
+
+## 7. The batching defence
+
+**The brief forbids technical and behavioural questions coming from "the same call with the
+same instructions". This design does not do that, and here is exactly why.**
+
+**The canonical unit is one requirement in one category:**
+
+```js
+generateQuestionsFor({ requirement, category, roleContext, hiringProcess }, { provider, spend })
+```
+
+It exists in `packages/core/generation/generateQuestions.js`, is exported and tested, and
+it is what the gap-fill pass uses.
+
+**The normal path batches requirements *within* a category, never across categories:**
+
+```js
+generateQuestionsForCategory({ category, requirements /* ≤ 5 */, roleContext, hiringProcess }, { provider, spend })
+```
+
+**It satisfies the rule on both counts:**
+1. **Not the same call.** Technical, behavioural, system-design and company-fit are four
+   **separate** requests. A technical question and a behavioural question never come back
+   in the same response.
+2. **Not the same instructions.** Each category carries **its own complete instruction
+   set**. It is not a shared template with one word swapped, and it defines what a good
+   question is and what its answer outline must contain:
+   - technical asks about mechanism, trade-off and failure
+   - behavioural asks for one specific past situation, with its four beats
+   - system design names a concrete constraint that makes the easy answer wrong
+   - company fit is grounded in something the pages actually say
+3. **The batch is the canonical unit with a longer list, not a second implementation.**
+   Both functions call the same internal `requestQuestions`, so there is one prompt builder,
+   one schema and one validator. A batched call cannot drift from the unit it batches.
+
+**Why batch at all: the arithmetic of the budget.** A kit has at most 12 calls. A posting
+with 15 requirements routed across 4 categories is roughly 25 requirement–category pairs.
+One call each would spend twice the whole budget on questions alone, before requirements,
+the brief, flashcards or a single gap fill. Batching within a category costs **four
+calls**, whatever the length of the posting.
+
+**What a batch cannot do:**
+- **Invent coverage.** Each returned question must cite a requirement that was in its own
+  batch, or it is discarded.
+- **Silently lose requirements.** Past five, extra requirements are returned as *deferred*,
+  not dropped. They are simply uncovered, and the coverage pass (§8) asks about them
+  through the canonical unit.
+
+---
+
+## 8. Coverage passes
+
+| | |
+|---|---|
+| **Cap** | `MAX_COVERAGE_PASSES = 3` |
+| **Checked by** | `findGaps(requirements, questions)`: requirement ids with no question listing them |
+| **Stops when** | no **must**-priority requirement is uncovered — or a stop condition below fires |
+
+**Pass 1 is the draft**: the four category calls. Some requirements end up with nothing,
+usually because they fell past a batch of five or belonged to a category whose call failed.
+
+**Pass 2 does the real work.** One gap-fill call is aimed at exactly the uncovered musts.
+The model sees only those requirements, never the kit, so it can add questions but cannot
+rewrite existing ones. Each requirement is asked about in the category its kind implies.
+
+**Pass 3 catches the stubborn remainder**: a requirement so oddly worded that the first
+gap fill also produced nothing usable.
+
+**The loop stops early, and says why, when:**
+- **all musts are covered.** Nice-to-have gaps may remain; they are noted, not chased. A
+  call spent on a nice-to-have is a call taken from a must.
+- **a pass produced nothing.** The next pass would send the identical input and prompt,
+  so it would produce nothing again.
+- **the budget is exhausted**, or **the clock is past the soft deadline** (pass 3 only).
+- **the cap is reached.** Beyond three, the model restates what it has already written in
+  slightly different words, while each attempt costs a request from a small daily
+  allowance.
+
+**The result is honest.** Pass 1 always runs, and every later pass exists only to close a
+gap that code found. So:
+- `coverage.passes` records the passes that **actually ran**, not the cap.
+- `coverage.uncovered_requirement_ids` lists what remains.
+- a remaining must-have is written into `run_notes`.
+
+**Termination is guaranteed.** The gap set is recomputed from the questions at the start
+of every pass, gap fill only ever adds questions, and the loop is bounded by the cap.
+
+---
+
+## 12. Budgets and degradation
+
+**Every build degrades instead of aborting.** Exactly one failure is fatal: no requirements
+could be extracted, so there is nothing to question, cover or schedule. Everything else is
+recorded in the kit's `run_notes` and the build carries on with less. The batch envelope
+reports such a case as `ok`, with its gaps visible.
+
+### The call budget: 12 per kit
+
+```
+1  requirements       1  role profile       1  hiring-page confirmation
+1  hiring process     1  company brief      4  questions (one per category)
+1  flashcards         1  gap fill (pass 2)
+= 11 on the normal path; the 12th is reserved for an optional third coverage pass
+```
+
+- **A repair spends.** It is a real request that uses the daily allowance and the clock.
+- **A transport retry does not.** A 429 or 503 retried is the same request again, paced
+  by the limiter. Charging retries to the kit would let one bad afternoon at Google halve
+  what every kit may do.
+- **Steps that are not needed spend nothing.** No hiring page means no hiring-process
+  call. No fetched pages means no brief call. An obvious hiring page means no confirmation
+  call. No routed requirements means no call for that category.
+- Before each call the orchestrator asks whether the budget allows it. When it does not,
+  the step is skipped and noted.
+
+Measured on the live five-case run: 39 calls for five kits.
+
+### The time governor: a soft 150-second deadline per case
+
+The deadline is **soft**:
+- **Nothing is killed mid-flight.** A call abandoned after its tokens are spent costs
+  exactly what finishing it would, and returns nothing.
+- **The deadline only changes what is started.** Each step asks the governor before it
+  begins.
+- **Each case has its own clock.** One slow company site cannot starve the other cases in
+  a batch.
+
+| Under pressure (budget or clock) | What happens |
+|---|---|
+| **Flashcards** | May be skipped. The kit is complete without them, and nothing downstream assumes they exist. |
+| **Third coverage pass** | May be skipped. Passes 1 and 2 always run when a must is uncovered and the budget allows. |
+| **Public discussion search** | **Never skipped.** It narrows to a single result, and an empty result is recorded. |
+| **Requirements, question calls, coverage check, schedule, validation** | **Never skipped by the clock.** They are what makes it a kit. A question call is skipped only when the call budget is already gone, and its requirements are then reported as uncovered. |
+
+### Other degradations, all recorded, none fatal
+
+| Failure | Outcome |
+|---|---|
+| Company site unreachable, 404, or timing out | Brief says the site could not be read; everything from the posting is still built |
+| No hiring page | `NO_HIRING_PAGE_FOUND`; questions routed from the requirements alone |
+| A category call fails | Its requirements become gaps; the coverage pass asks again in a different shape |
+| Brief or hiring-process call fails | Recorded; the kit carries an honest empty field |
+| Daily request ceiling reached | Each later call is refused before it is sent; each step records that and the kit assembles from what exists. If the ceiling is hit before requirements are extracted, that is the one fatal case. |
+| Process restarts mid-build | Kit marked interrupted; it resumes from checkpoints without repeating finished calls |
