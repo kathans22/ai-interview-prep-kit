@@ -318,6 +318,11 @@ build in the process:
   raises no error: requests go out until Google refuses them, and each refusal costs a
   retry.
 
+**No `temperature` is sent.** Sampling parameters (`temperature`, `top_p`, `top_k`) are
+deprecated for the Gemini 3 model family. Consistent output comes from a response schema
+on every call, tight instructions, and code-side validation of every answer, not from
+sampling controls.
+
 **Why `^2.21.0` and not 3.x.** The 3.x line requires Node 22. The grading contract is a clean
 clone on someone else's machine, and the project supports Node 20.19+. The 2.x line runs on
 Node 20, 22 and 24 with the same call shape (`GoogleGenAI` → `ai.models.generateContent` →
@@ -415,8 +420,30 @@ tested against an in-memory store that passes the same contract test as the Mong
    resumes without repeating finished calls or re-fetching pages.
 6. When `buildKit` returns, the kit has already passed both validators. The job writes it
    as `ready`.
-7. If the process restarts mid-build, boot marks the orphaned kit `BUILD_INTERRUPTED`, and
-   the page offers to continue it.
+7. If the process restarts mid-build, boot marks the orphaned kit interrupted, and the
+   page offers to continue it.
+
+**Interrupted is not failed.** The server records an error **code**, not only a status.
+That lets the client show "interrupted — continue where it stopped" for a process that
+died, and "failed" only for a build that genuinely could not produce a kit. The two call
+for different words and different actions.
+
+**What a resume keeps, and what it refuses.**
+- **Kept:** only what was expensive, meaning the output of a call or a fetch:
+  requirements, the role profile, the crawled pages, the hiring page, the search, the
+  brief, the process, questions and flashcards.
+- **Not stored, recomputed:** coverage and the schedule. They are pure functions of the
+  rest, and a stored copy is how a resumed kit ends up with a schedule that disagrees with
+  its own questions.
+- **A checkpoint that does not match the kit is refused**: a different company URL, a
+  posting of a different length, or an older checkpoint format. The build then starts over
+  and says why. Resuming one job's requirements into another job's kit would be valid
+  against the contract and wrong in a way nothing downstream checks. The fingerprint is
+  the posting's length, not its text: cheap, and enough for a checkpoint stored on the
+  same kit.
+- **An unreadable checkpoint is not a failure.** It means a full rebuild, which is what
+  would have happened without one.
+- **"Start over" is available too.** It ignores any checkpoint and costs a fresh build.
 
 ---
 
