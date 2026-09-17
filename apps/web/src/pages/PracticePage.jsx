@@ -18,6 +18,11 @@
  * read that "Start a new session" makes, which is what brings this session's "again" cards
  * back to the front.
  *
+ * WEAK SPOTS ARE NAMED, NOT JUST APPLIED. When scored answers missed requirements, their
+ * cards lead the deck — and the page says which requirements those are and that this is
+ * why, marks the cards, and says plainly when a weak requirement has no card to practise.
+ * Like the order, this is taken when the session starts.
+ *
  * IF THE ORDER CANNOT BE READ, PRACTICE STILL WORKS, in the kit's own order, and the page
  * says so. The order is an improvement on practising, not a precondition for it.
  *
@@ -43,6 +48,7 @@ import { useKit, usePracticeHistory, useRecordPractice } from '../hooks/useKits.
 import FlashcardStepper from '../practice/FlashcardStepper.jsx';
 import SessionSummary from '../practice/SessionSummary.jsx';
 import { summariseSession } from '../practice/summary.js';
+import { describeWeakSpots } from '../scoring/weakSpots.js';
 
 /** The cards in `order` first, then any the order did not mention, in the kit's order. */
 function arrange(cards, order) {
@@ -71,15 +77,29 @@ export default function PracticePage() {
   const [orderUnavailable, setOrderUnavailable] = useState(false);
   const [finished, setFinished] = useState(null);
   const [starting, setStarting] = useState(false);
+  // The session's weak spots and weak cards, taken with its order.
+  const [weak, setWeak] = useState({ requirementIds: [], cardIds: new Set() });
+
+  const adoptDeck = (read) => {
+    const deck = read?.deck ?? [];
+    setOrder(deck.map((card) => card.id));
+    setWeak({
+      requirementIds: read?.weakRequirements ?? [],
+      cardIds: new Set(deck.filter((card) => card.weak).map((card) => card.id)),
+    });
+  };
 
   // The first session's order, as soon as the first read of the history settles either way.
   useEffect(() => {
     if (order !== null) return;
-    if (practiceHistory.status === ASYNC_STATES.ready) setOrder(practiceHistory.deck.map((card) => card.id));
+    if (practiceHistory.status === ASYNC_STATES.ready) {
+      adoptDeck({ deck: practiceHistory.deck, weakRequirements: practiceHistory.weakRequirements });
+    }
     if (practiceHistory.status === ASYNC_STATES.error) {
       setOrderUnavailable(true);
       setOrder([]);
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [order, practiceHistory.status, practiceHistory.deck]);
 
   const rateCard = (cardId, confidence) =>
@@ -92,11 +112,12 @@ export default function PracticePage() {
     setStarting(true);
     try {
       const fresh = await practiceHistory.reload();
-      setOrder((fresh?.deck ?? []).map((card) => card.id));
+      adoptDeck(fresh);
       setOrderUnavailable(false);
     } catch (thrown) {
       show(`Could not read your latest ratings, so this session keeps the kit's order. ${thrown.message}`, { tone: 'error' });
       setOrder([]);
+      setWeak({ requirementIds: [], cardIds: new Set() });
       setOrderUnavailable(true);
     } finally {
       setStarting(false);
@@ -106,6 +127,7 @@ export default function PracticePage() {
   }
 
   const sessionCards = arrange(cards, order);
+  const weakSpots = ready ? describeWeakSpots(weak.requirementIds, kit.role?.requirements ?? [], cards) : [];
 
   return (
     <section>
@@ -159,6 +181,30 @@ export default function PracticePage() {
             </div>
           ) : (
             <>
+              {weakSpots.length > 0 ? (
+                <section
+                  aria-labelledby="practice-weak-heading"
+                  data-weak-spots=""
+                  className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-950"
+                >
+                  <h2 id="practice-weak-heading" className="font-medium">
+                    Weak spots from your scored answers
+                  </h2>
+                  <ul className="mt-1 space-y-0.5">
+                    {weakSpots.map((spot) => (
+                      <li key={spot.id} className="break-words" data-weak-requirement={spot.id}>
+                        <span className="font-mono text-xs">{spot.id}</span> {spot.text}
+                        <span className="text-amber-800">
+                          {' — '}
+                          {spot.hasCard
+                            ? `its ${spot.cardIds.length === 1 ? 'card comes' : 'cards come'} first in this session`
+                            : 'no flashcard covers this; add one on the kit page'}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
               {orderUnavailable ? (
                 <p className="mb-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   Your practice history could not be read, so the cards are in the kit's own order this session.
@@ -171,6 +217,7 @@ export default function PracticePage() {
                 history={history}
                 onRate={rateCard}
                 onFinish={setFinished}
+                weakCardIds={weak.cardIds}
                 autoFocus={round > 0}
               />
             </>

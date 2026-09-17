@@ -15,7 +15,7 @@ import { useState } from 'react';
 
 import AnswerScorePanel from './AnswerScorePanel.jsx';
 
-export default function AnswerPractice({ kitId, question, onBeforeScore }) {
+export default function AnswerPractice({ kitId, question, cards, onBeforeScore }) {
   const [opened, setOpened] = useState(false);
 
   return (
@@ -26,7 +26,7 @@ export default function AnswerPractice({ kitId, question, onBeforeScore }) {
       }}
     >
       <summary className="cursor-pointer text-sm text-slate-700">Answer it, and get scored</summary>
-      {opened ? <AnswerScorePanel kitId={kitId} question={question} onBeforeScore={onBeforeScore} /> : null}
+      {opened ? <AnswerScorePanel kitId={kitId} question={question} cards={cards} onBeforeScore={onBeforeScore} /> : null}
     </details>
   );
 }

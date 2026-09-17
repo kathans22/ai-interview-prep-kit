@@ -68,7 +68,7 @@ function describePast(past) {
   return `Last practised: ${label} · ${past.attempts} ${past.attempts === 1 ? 'time' : 'times'}`;
 }
 
-export default function FlashcardStepper({ cards, requirements, history, onRate, onFinish, autoFocus = false }) {
+export default function FlashcardStepper({ cards, requirements, history, onRate, onFinish, autoFocus = false, weakCardIds }) {
   const [session, setSession] = useState(() => createSession(cards.map((card) => card.id)));
   const answerRef = useRef(null);
   const revealRef = useRef(null);
@@ -162,7 +162,14 @@ export default function FlashcardStepper({ cards, requirements, history, onRate,
         <h2 id="practice-card-position" className="text-sm font-semibold text-slate-900">
           {position}
         </h2>
-        <span className="font-mono text-xs text-slate-500">{card.id}</span>
+        <span className="inline-flex items-center gap-2">
+          {weakCardIds?.has(card.id) ? (
+            <span data-weak-card="" className="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-900">
+              Weak spot
+            </span>
+          ) : null}
+          <span className="font-mono text-xs text-slate-500">{card.id}</span>
+        </span>
       </header>
 
       <div className="px-4 py-5">

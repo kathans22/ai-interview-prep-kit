@@ -19,13 +19,20 @@
  *
  * FOCUS MOVES TO THE VERDICT when it arrives: it replaces nothing on screen, so without that a
  * screen reader user would not know it had appeared.
+ *
+ * A MISS SAYS WHAT HAPPENS NEXT. Missed requirements pull their flashcards to the front of
+ * practice, and the verdict says so and links there — or, when no card covers what was
+ * missed, says that practice cannot bring it back. That sentence is the loop from the
+ * question bank, through the requirement ids, to practice.
  */
 
 import { useEffect, useId, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 
 import { buttonClasses } from '../ui/Button.jsx';
 import { useScoreAnswer } from '../hooks/useKits.js';
 import { ANSWER_MAX_CHARS, checkAnswer, describeVerdict } from './feedback.js';
+import { practiceNote } from './weakSpots.js';
 
 function PointList({ points, tone }) {
   return (
@@ -41,7 +48,7 @@ function PointList({ points, tone }) {
   );
 }
 
-export default function AnswerScorePanel({ kitId, question, onBeforeScore }) {
+export default function AnswerScorePanel({ kitId, question, cards = [], onBeforeScore }) {
   const ids = useId();
   const [answer, setAnswer] = useState('');
   const [saveError, setSaveError] = useState(null);
@@ -51,6 +58,7 @@ export default function AnswerScorePanel({ kitId, question, onBeforeScore }) {
   const check = checkAnswer(answer);
   const blocked = !check.ok || isLoading;
   const verdict = data?.result ? describeVerdict(data.result) : null;
+  const note = data?.result ? practiceNote(data.result.missedRequirementIds, cards) : null;
 
   useEffect(() => {
     if (data?.result) verdictRef.current?.focus();
@@ -150,6 +158,20 @@ export default function AnswerScorePanel({ kitId, question, onBeforeScore }) {
             <p className="text-xs font-medium uppercase tracking-wide text-sky-800">One improvement</p>
             <p className="mt-0.5 break-words text-sm text-slate-900">{verdict.improvement}</p>
           </div>
+
+          {note ? (
+            <div className="mt-3 flex flex-wrap items-center gap-2" data-verdict-practice="">
+              <p className="min-w-0 break-words text-sm text-slate-700">{note.text}</p>
+              {note.canPractise ? (
+                <Link
+                  to={`/kits/${encodeURIComponent(kitId)}/practice`}
+                  className={buttonClasses({ variant: 'secondary', size: 'sm' })}
+                >
+                  Practise the flashcards
+                </Link>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>

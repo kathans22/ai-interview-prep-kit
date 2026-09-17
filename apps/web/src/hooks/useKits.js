@@ -133,6 +133,8 @@ export function usePracticeHistory(id) {
     total: data?.total ?? 0,
     entries: data?.entries ?? [],
     deck: data?.deck ?? [],
+    /** Requirement ids a scored answer most recently missed; their cards lead the deck. */
+    weakRequirements: data?.weakRequirements ?? [],
     cards: data?.cards ?? [],
     questions: data?.questions ?? [],
   };

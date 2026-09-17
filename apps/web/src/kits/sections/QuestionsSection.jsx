@@ -357,7 +357,12 @@ export default function QuestionsSection({ kitId, kit, editor, regeneration, onR
                           </EditableText>
                         </details>
 
-                        <AnswerPractice kitId={kitId} question={question} onBeforeScore={editor.settle} />
+                        <AnswerPractice
+                          kitId={kitId}
+                          question={question}
+                          cards={kit?.flashcards ?? []}
+                          onBeforeScore={editor.settle}
+                        />
 
                         <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2">
                           {['up', 'down'].map((direction) => {
