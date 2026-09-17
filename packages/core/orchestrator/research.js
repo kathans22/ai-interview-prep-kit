@@ -71,6 +71,10 @@ export async function researchFromJd({ jd, deps, reporter, budget, state }) {
     state.requirementNotes = extraction.note;
     state.droppedRequirements = extraction.dropped;
     state.thinJd = extraction.thin;
+    // The extraction's own explanation — thin posting, dropped or merged requirements, a
+    // truncated posting — belongs in the kit's notes. Without this a thin posting reached
+    // the kit as a bare `thin_jd` flag, and a truncation reached it not at all.
+    if (extraction.note) state.notes.push(extraction.note);
 
     reporter.emit(STEPS.REQUIREMENTS, STATUS.DONE, {
       count: extraction.requirements.length,

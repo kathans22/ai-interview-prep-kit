@@ -493,6 +493,24 @@ test('a resume skips completed steps and re-fetches nothing', async () => {
   assert.equal(validateKit(run2.kit).valid, true);
 });
 
+test("the extraction's note reaches the kit's run notes once, resumed or not", async () => {
+  const store = createMemoryCheckpointStore();
+  const input = { jd: JD, company_url: '', days: 3, kitId: 'kit-extraction-note' };
+  const isThinNote = (note) => /below the 400-character threshold/.test(note);
+
+  // This posting is under the thin threshold, so extraction explains why its list is short.
+  const run1 = await buildKit(input, baseDeps(healthyProvider(), { checkpointStore: store }), {});
+  assert.equal(run1.kit.thin_jd, true);
+  assert.equal(run1.kit.run_notes.filter(isThinNote).length, 1, JSON.stringify(run1.kit.run_notes));
+
+  const run2 = await buildKit(
+    { ...input, resumeFrom: 'kit-extraction-note' },
+    baseDeps(healthyProvider(), { checkpointStore: store }),
+    {}
+  );
+  assert.equal(run2.kit.run_notes.filter(isThinNote).length, 1, 'a resume restores the note, not a second copy');
+});
+
 test('a checkpoint from a different posting is refused', async () => {
   const store = createMemoryCheckpointStore();
   const input = { jd: JD, company_url: '', days: 3, kitId: 'kit-mismatch' };
