@@ -25,6 +25,7 @@ function validEnv(overrides = {}) {
     NODE_ENV: 'development',
     PORT: '4000',
     WEB_ORIGIN: 'http://localhost:5173',
+    TRUST_PROXY_HOPS: '1',
     MONGODB_URI: 'mongodb://127.0.0.1:27017/ai_interview_prep_kit',
     SESSION_SECRET: 'a'.repeat(64),
     GEMINI_API_KEY: 'test-key',
@@ -150,6 +151,18 @@ test('the crawl and fetch numbers land in config as integers', () => {
   assert.equal(config.budgets.idempotencyWindowMs, 900000);
   assert.equal(config.fixtures.port, 8099);
   assert.equal(config.retrieval.crawlMaxDepth, 2, 'absent from the template, defaulted here');
+});
+
+test('the proxy hop count defaults to one, and is bounded', () => {
+  assert.equal(validateEnv(validEnv()).config.server.trustProxyHops, 1);
+  assert.equal(validateEnv(validEnv({ TRUST_PROXY_HOPS: '' })).config.server.trustProxyHops, 1, 'optional');
+  assert.equal(validateEnv(validEnv({ TRUST_PROXY_HOPS: '2' })).config.server.trustProxyHops, 2);
+
+  // Trusting more hops than exist lets a client write its own address into the header
+  // and walk past the per-IP limiter. Zero would ignore the host's own balancer.
+  for (const value of ['0', '6', 'two']) {
+    assert.equal(validateEnv(validEnv({ TRUST_PROXY_HOPS: value })).ok, false, value);
+  }
 });
 
 test('integers outside a sane range are rejected with their bounds named', () => {

@@ -55,7 +55,9 @@ export function createApp({ store, config, deps = {}, log = console.error } = {}
   // Trust the proxy in production so `secure` cookies and client IPs work behind one.
   // Left off locally, where there is no proxy and trusting a forwarded header would let
   // any client claim any IP — which would defeat the rate limiter.
-  if (config.isProduction) app.set('trust proxy', 1);
+  // The hop count is configured, not fixed: behind the static host's /api proxy there are
+  // two, and trusting only one makes `request.ip` the proxy's address for every user.
+  if (config.isProduction) app.set('trust proxy', config.server?.trustProxyHops ?? 1);
 
   // --- 1. request id -------------------------------------------------------
   app.use((request, response, next) => {

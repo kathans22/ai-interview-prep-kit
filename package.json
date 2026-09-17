@@ -18,6 +18,8 @@
     "smoke": "node scripts/smoke.js",
     "dev:server": "npm run dev --workspace @aipk/server",
     "dev:web": "npm run dev --workspace @aipk/web",
+    "start": "npm run start --workspace @aipk/server",
+    "build:web": "npm run build --workspace @aipk/web",
     "test": "node --test"
   }
 }

@@ -9,7 +9,8 @@
     "node": "^20.19.0 || >=22.12.0"
   },
   "scripts": {
-    "dev": "node --watch src/index.js"
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
   },
   "dependencies": {
     "@aipk/core": "*",

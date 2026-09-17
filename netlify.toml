@@ -1,0 +1,31 @@
+# Netlify — the static web client.
+#
+# Built from the repository root so npm installs the workspaces from the one lockfile.
+# The build writes apps/web/dist/_redirects (apps/web/scripts/redirects.js): /api/* is
+# proxied to API_ORIGIN, and every other path falls back to index.html for the router.
+#
+# Set in the Netlify site's environment variables, not here:
+#   API_ORIGIN   the deployed API's https origin, e.g. https://<service>.onrender.com
+# The build fails if it is missing, rather than publishing a site that reaches no API.
+
+[build]
+  base = "/"
+  command = "npm run build:web"
+  publish = "apps/web/dist"
+
+[build.environment]
+  # Vite 8 needs 20.19+; 22 is the current LTS line.
+  NODE_VERSION = "22"
+
+# The built assets are content-hashed, so they can be cached for good; index.html cannot.
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    X-Frame-Options = "DENY"

@@ -61,6 +61,11 @@ export const OPTIONAL_VARS = {
   FIXTURE_PORT: 8099,
   // Crawl depth is the one crawl knob the template omits; core defaults to 2.
   CRAWL_MAX_DEPTH: 2,
+  // How many proxies stand between the browser and this process, for Express's
+  // `trust proxy` (production only). 1 is the host's own load balancer. 2 when the
+  // static frontend also proxies /api — without it every user shares the frontend
+  // host's address and the per-IP sign-in limit is one bucket for everybody.
+  TRUST_PROXY_HOPS: 1,
 };
 
 /**
@@ -88,6 +93,7 @@ const INTEGER_VARS = Object.freeze({
   FETCH_MAX_BYTES: { min: 10_000, max: 100_000_000 },
   PORT: { min: 1, max: 65_535 },
   FIXTURE_PORT: { min: 0, max: 65_535 },
+  TRUST_PROXY_HOPS: { min: 1, max: 5 },
 });
 
 const BOOLEAN_VARS = ['ALLOW_PRIVATE_HOSTS'];
@@ -440,6 +446,7 @@ export function validateEnv(source = {}) {
       server: {
         port: numbers.PORT,
         webOrigin: String(source.WEB_ORIGIN).trim(),
+        trustProxyHops: numbers.TRUST_PROXY_HOPS,
       },
     },
   };
