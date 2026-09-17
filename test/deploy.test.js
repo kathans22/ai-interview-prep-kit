@@ -156,6 +156,21 @@ test('the local dev server loads the root .env; the production start reads only 
   await access(join(repoRoot, 'apps/server', '../../.env.example'));
 });
 
+test('vercel.json proxies /api to an https API origin first, then falls back to the app', async () => {
+  const { rewrites } = JSON.parse(await read('vercel.json'));
+  assert.equal(rewrites.length, 2);
+
+  const [api, fallback] = rewrites;
+  assert.equal(api.source, '/api/:path*');
+  const destination = new URL(api.destination.replace(':path*', 'x'));
+  assert.equal(destination.protocol, 'https:');
+  assert.equal(destination.pathname, '/api/x', 'the /api prefix is kept, never doubled or dropped');
+
+  // Last, so a real /api route and the built assets are never swallowed by it; without it,
+  // reloading /kits/abc on the static host is a 404.
+  assert.deepEqual(fallback, { source: '/(.*)', destination: '/index.html' });
+});
+
 test('the server can be started by a host without watch mode', async () => {
   const { scripts } = JSON.parse(await read('package.json'));
   const server = JSON.parse(await read('apps/server/package.json'));
