@@ -17,7 +17,7 @@ import http from 'node:http';
 import net from 'node:net';
 
 import { startFixtureServer } from '../../../fixtures/serve.js';
-import { buildKit } from '../orchestrator/buildKit.js';
+import { buildKit, BuildFailedError } from '../orchestrator/buildKit.js';
 import { createUnboundedGovernor } from '../orchestrator/timeGovernor.js';
 import { STEPS, STATUS } from '../orchestrator/steps.js';
 import { createUrlGuard, URL_SKIP_REASONS } from '../retrieval/urlGuard.js';
@@ -27,6 +27,8 @@ import { createNoopSearchProvider, SEARCH_REASONS } from '../retrieval/searchPub
 import { HIRING_PAGE_REASONS } from '../retrieval/findHiringPage.js';
 import { createSourceLedger } from '../retrieval/sourceLedger.js';
 import { createFixtureProvider } from '../llm/offlineProvider.js';
+import { createGeminiProvider, LLM_ERROR_CODES } from '../llm/provider.js';
+import { fakeResponse } from '../llm/fakeProvider.js';
 import { validateKit } from '../contracts/validateKit.js';
 import { verifySchedule } from '../deterministic/verifySchedule.js';
 import { findGaps } from '../deterministic/coverage.js';
@@ -426,4 +428,155 @@ test('edge 3: requirements a model pads a stub posting with are dropped, not kep
 
   const questionText = kit.questions.map((question) => `${question.prompt} ${question.answer_outline}`).join('\n');
   assert.doesNotMatch(questionText, /kubernetes|aws|communication skills/i, 'no question is written about them either');
+});
+
+// ===========================================================================
+// EDGE CASE 5 — invalid JSON or truncation → repair once, then typed failure
+// ===========================================================================
+
+/**
+ * The REAL Gemini adapter over a scripted SDK client, for one step; the offline provider
+ * for every other step.
+ *
+ * The fake provider throws pre-built errors, which proves what the pipeline does with an
+ * error but not that bad output becomes that error. Here the bytes a model might send —
+ * JSON cut off mid-array, or a MAX_TOKENS finish — go through `createGeminiProvider`'s own
+ * parsing, so the whole path from response to kit is the production one.
+ *
+ * `script` is consumed one response per call to the scripted step: a string is sent as the
+ * response text with finishReason STOP; `{ text, finishReason }` sets both; `null` means
+ * "answer properly", using the offline provider's answer for that request.
+ */
+function scriptedStep(scriptedStepName, script) {
+  const offline = createFixtureProvider();
+  const sent = [];
+  let pending = null;
+
+  const client = {
+    models: {
+      async generateContent({ contents, config }) {
+        sent.push({ systemInstruction: config.systemInstruction, contents });
+        const entry = script.length > 0 ? script.shift() : null;
+        if (entry === null) {
+          const { data } = await offline.complete({ ...pending, contents, systemInstruction: config.systemInstruction });
+          return fakeResponse(data);
+        }
+        const { text, finishReason = 'STOP' } = typeof entry === 'string' ? { text: entry } : entry;
+        return fakeResponse(text, { finishReason });
+      },
+      async countTokens() {
+        return { totalTokens: 100 };
+      },
+    },
+  };
+  const gemini = createGeminiProvider({ client, model: 'scripted-gemini' });
+
+  return {
+    name: 'scripted',
+    model: 'scripted-gemini',
+    sent,
+    offlineCalls: () => offline.callCount(),
+    countTokens: async () => 100,
+    async complete(request) {
+      if (request.step !== scriptedStepName) return offline.complete(request);
+      pending = request;
+      return gemini.complete(request);
+    },
+  };
+}
+
+/** JSON a model stopped writing halfway through an array. */
+const CUT_OFF_JSON = '{"requirements": [{"text": "Deep expertise in Go", "kind": "technical", "priority": "must", "evid';
+
+/** JSON that parses, from a response whose finishReason says it was truncated. */
+const TRUNCATED_BUT_PARSEABLE = {
+  text: JSON.stringify({
+    requirements: [{ text: 'Deep expertise in Go', kind: 'technical', priority: 'must', evidence: 'Deep expertise in Go' }],
+  }),
+  finishReason: 'MAX_TOKENS',
+};
+
+test('edge 5: unparseable output is repaired once and the kit completes', async () => {
+  const provider = scriptedStep('extract-requirements', [CUT_OFF_JSON, null]);
+  const result = await buildKit({ jd: JD, company_url: '', days: 5 }, deps({ provider }), {});
+  const untroubled = await buildKit({ jd: JD, company_url: '', days: 5 }, deps(), {});
+
+  assert.equal(validateKit(result.kit).valid, true);
+  assert.deepEqual(
+    result.kit.role.requirements,
+    untroubled.kit.role.requirements,
+    'the repaired answer is used, exactly as if nothing had gone wrong'
+  );
+  assert.equal(provider.sent.length, 2, 'one attempt and exactly one repair');
+
+  const [first, repair] = provider.sent;
+  assert.doesNotMatch(first.systemInstruction, /PREVIOUS RESPONSE WAS REJECTED/);
+  assert.match(repair.systemInstruction, /PREVIOUS RESPONSE WAS REJECTED/);
+  assert.match(repair.systemInstruction, /not JSON/, 'the repair says what was wrong');
+  assert.equal(repair.contents, first.contents, 'the repair asks about the same posting');
+  assert.equal(result.budget.breakdown[STEPS.REQUIREMENTS], 2, 'the repair spent from the call budget');
+});
+
+test('edge 5: output that fails again after its repair is a typed failure, with no third attempt', async () => {
+  const provider = scriptedStep('extract-requirements', [CUT_OFF_JSON, CUT_OFF_JSON, null]);
+
+  await assert.rejects(buildKit({ jd: JD, company_url: '', days: 5 }, deps({ provider }), {}), (error) => {
+    assert.ok(error instanceof BuildFailedError);
+    assert.equal(error.code, LLM_ERROR_CODES.INVALID_OUTPUT);
+    assert.equal(error.details.cause.details.repaired, true);
+    assert.match(error.message, /failed twice/);
+    return true;
+  });
+  assert.equal(provider.sent.length, 2, 'one attempt, one repair, then stop');
+  assert.equal(provider.offlineCalls(), 0, 'nothing is built on requirements that do not exist');
+});
+
+test('edge 5: truncated output is a typed failure at once — asking again would truncate again', async () => {
+  const provider = scriptedStep('extract-requirements', [TRUNCATED_BUT_PARSEABLE, null]);
+
+  await assert.rejects(buildKit({ jd: JD, company_url: '', days: 5 }, deps({ provider }), {}), (error) => {
+    assert.ok(error instanceof BuildFailedError);
+    assert.equal(error.code, LLM_ERROR_CODES.INVALID_OUTPUT);
+    assert.equal(error.details.cause.details.truncated, true);
+    assert.match(error.message, /maxOutputTokens/);
+    return true;
+  });
+  assert.equal(provider.sent.length, 1, 'no repair: the JSON parsed, but it may be missing items');
+});
+
+test('edge 5: a step that may degrade records its typed failure and the kit is still built', async () => {
+  const provider = scriptedStep('company-brief', [CUT_OFF_JSON, CUT_OFF_JSON]);
+  const result = await buildKit(
+    { jd: JD, company_url: `${server.origin}/acme/`, days: 5 },
+    deps({ provider }),
+    {}
+  );
+
+  assert.equal(validateKit(result.kit).valid, true);
+  assert.equal(provider.sent.length, 2, 'repaired once, then given up on');
+  assert.match(result.kit.company_brief.summary, /could not be produced/);
+  assert.equal(result.kit.company_brief.what_they_do, '', 'nothing was made up in its place');
+  assert.ok(result.kit.run_notes.includes(`Company brief failed (${LLM_ERROR_CODES.INVALID_OUTPUT}).`));
+});
+
+test('edge 5: a truncated question call leaves its requirements to the coverage pass', async () => {
+  const provider = scriptedStep('questions:technical', [{ text: '{"questions": []}', finishReason: 'MAX_TOKENS' }, null]);
+  const result = await buildKit({ jd: JD, company_url: '', days: 5 }, deps({ provider }), {});
+  const { kit, state } = result;
+
+  assert.equal(validateKit(kit).valid, true);
+
+  // Two technical calls, and the second is not a repair: truncation is never repaired.
+  // It is the gap-fill pass asking about ONE requirement the truncated batch left bare.
+  const [batch, gapFill] = provider.sent;
+  assert.equal(provider.sent.length, 2);
+  assert.doesNotMatch(gapFill.systemInstruction, /PREVIOUS RESPONSE WAS REJECTED/);
+  const idsIn = (call) => new Set([...call.contents.matchAll(/\b(r\d+)\b/g)].map((match) => match[1]));
+  assert.ok(idsIn(batch).size > 1, 'the truncated call was the category batch');
+  assert.equal(idsIn(gapFill).size, 1, 'the follow-up is a single-requirement gap fill');
+
+  assert.deepEqual(state.failedCategories, [{ category: 'technical', reason: LLM_ERROR_CODES.INVALID_OUTPUT }]);
+  assert.ok(kit.run_notes.includes(`The technical question call failed (${LLM_ERROR_CODES.INVALID_OUTPUT}).`));
+  assert.deepEqual(kit.coverage.uncovered_requirement_ids, [], 'the gap-fill pass covered what the failed call would have');
+  assert.equal(kit.coverage.passes, 2);
 });
