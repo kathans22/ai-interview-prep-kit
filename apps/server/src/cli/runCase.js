@@ -122,8 +122,9 @@ export function toCaseError(error) {
  * @param {object} options.config the validated config object from `env.js`
  * @param {object} [options.provider] injected in tests; a real Gemini provider otherwise
  * @param {Function} [options.fetchImpl] injected in tests
+ * @param {Function} [options.searchFetchImpl] injected in tests, for the search provider only
  */
-export function createRunContext({ config, provider = null, fetchImpl = undefined } = {}) {
+export function createRunContext({ config, provider = null, fetchImpl = undefined, searchFetchImpl = undefined } = {}) {
   if (!config) throw new Error('createRunContext requires the validated config.');
 
   // ONE limiter for the process, from the owner's real rate-limit numbers. `getLimiter()`
@@ -163,6 +164,12 @@ export function createRunContext({ config, provider = null, fetchImpl = undefine
     maxBytes: config.retrieval.fetchMaxBytes,
   });
 
+  // `searchFetchImpl` lets a test stand in for Tavily without touching page fetches.
+  const search = selectSearchProvider(
+    config.retrieval,
+    searchFetchImpl ? { fetchImpl: searchFetchImpl } : {}
+  );
+
   const mainProvider =
     provider ??
     createGeminiProvider({
@@ -193,7 +200,13 @@ export function createRunContext({ config, provider = null, fetchImpl = undefine
     fetcher,
     robots: createRobotsChecker({ fetcher }),
     cache: createPageCache(),
-    searchProvider: selectSearchProvider(config.retrieval),
+    // `.provider`, not the selection. `selectSearchProvider` returns
+    // `{ provider, degraded, reason }`, and passing that whole record meant the search step
+    // received an object with no `search()` — so it recorded SEARCH_NOT_ATTEMPTED on every
+    // case, in the batch command and in the server, while every unit test of the selector
+    // and of the search passed. The selection is kept beside it for anyone reporting why.
+    searchProvider: search.provider,
+    searchSelection: search,
   };
 }
 
